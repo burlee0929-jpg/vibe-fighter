@@ -36,12 +36,14 @@ import {
   STARTER_GAME_CONFIG_SAVE_TARGET,
   type StarterGameConfig
 } from '../game/core/config';
+import { playUiHoverSound, unlockAudioContext } from '../game/core/audio';
 import { formatInputSnapshot } from '../game/core/input';
 import { saveJsonToPublicAsset } from '../game/core/saveJson';
 import { setAppContext, type AppContext } from '../game/context';
 import { GAME_TAGLINE, GAME_TITLE } from '../game/constants';
 import { createDebugStore } from '../game/debug';
 import { createGame } from '../game/createGame';
+import { formatDurationHms, getBackgroundMusic } from '../game/fightMusic';
 import {
   CHARACTER_DEFINITIONS,
   FIGHTER_CHARACTER_DEFINITIONS,
@@ -83,6 +85,7 @@ import {
   STAGE_DEFINITIONS
 } from '../game/stageConfig';
 import { createSettingsStore } from '../game/settings';
+import { getSessionRecordStore, type SessionMatchRecord } from '../game/sessionRecord';
 import type { Store } from '../game/store';
 import {
   SCENE_KEYS,
@@ -105,6 +108,7 @@ import {
   type TileGymBoundsEdit,
   type TileGymDebugState
 } from '../game/types';
+import { mountAccountModal } from './accountModal';
 import { renderDebugPanels } from './debugPanels';
 
 type LevelEditorObjectDefinition = LevelEditorDebugState['level']['objects'][number];
@@ -124,7 +128,7 @@ export function createApp(root: HTMLElement): void {
       ${isDebugShell ? `
         <header class="app-shell__header">
           <div class="app-shell__brand">
-            <p class="eyebrow">PHASER 4 ▸ VITE ▸ TYPESCRIPT</p>
+            <p class="eyebrow">STREET FIGHTER ▸ ARCADE</p>
             <h1>${GAME_TITLE.toUpperCase()}</h1>
             ${GAME_TAGLINE ? `<p class="subtitle">${GAME_TAGLINE}</p>` : ''}
           </div>
@@ -139,13 +143,37 @@ export function createApp(root: HTMLElement): void {
       ` : ''}
       <div class="app-shell__workspace">
         <section class="game-host">
-          ${isDebugShell ? `
-            <div class="game-host__bezel-label">
-              <span>${GAME_TITLE.toUpperCase()} ▸ GAME</span>
-              <span class="dots"><i></i><i></i><i></i></span>
+          <div class="game-host__bezel-label">
+            <span class="game-host__bezel-title">${GAME_TITLE.toUpperCase()} ▸ GAME</span>
+            <span
+              id="session-record-badge"
+              class="bezel-record"
+              data-result="idle"
+              aria-live="polite"
+              title="Session Win / Loss Record"
+            >
+              <span class="bezel-record__label">RECORD</span>
+              <strong id="session-record-value">0W - 0L</strong>
+              <span id="session-record-streak" class="bezel-record__streak" hidden></span>
+            </span>
+            <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+          </div>
+          <div class="game-viewport">
+            <div id="game-root" class="game-root"></div>
+            <div class="viewport-top-actions">
+              <button
+                id="bgm-mute-toggle"
+                class="bgm-mute-toggle"
+                type="button"
+                data-muted="false"
+                aria-label="Mute or unmute background music"
+                title="Toggle Background Music (N)"
+              >
+                <span class="bgm-mute-toggle__icon" aria-hidden="true">🔊</span>
+                <span class="bgm-mute-toggle__label">RYU 24H</span>
+              </button>
             </div>
-          ` : ''}
-          <div id="game-root" class="game-root"></div>
+          </div>
         </section>
         ${isDebugShell ? `
           <aside id="debug-panel" class="debug-panel">
@@ -168,7 +196,12 @@ export function createApp(root: HTMLElement): void {
   `;
 
   const appShell = root.querySelector<HTMLElement>('.app-shell');
+  const gameViewport = root.querySelector<HTMLElement>('.game-viewport');
   const gameRoot = root.querySelector<HTMLElement>('#game-root');
+  const bgmMuteToggle = root.querySelector<HTMLButtonElement>('#bgm-mute-toggle');
+  const sessionRecordBadge = root.querySelector<HTMLElement>('#session-record-badge');
+  const sessionRecordValue = root.querySelector<HTMLElement>('#session-record-value');
+  const sessionRecordStreak = root.querySelector<HTMLElement>('#session-record-streak');
   const debugPanel = root.querySelector<HTMLElement>('#debug-panel');
   const debugControls = root.querySelector<HTMLElement>('#debug-controls');
   const collapseButton = root.querySelector<HTMLButtonElement>('#debug-collapse');
@@ -184,9 +217,130 @@ export function createApp(root: HTMLElement): void {
   const settingsStore = createSettingsStore();
   const debugStore = createDebugStore();
   const gameConfigStore = createGameConfigStore();
+  const sessionRecordStore = getSessionRecordStore();
   let currentProfile = resolveStartupProfile(window.location.search);
   let game: Phaser.Game | null = null;
   let playToastTimeout: number | null = null;
+
+  if (sessionRecordBadge && sessionRecordValue && sessionRecordStreak) {
+    let lastMatchesPlayed: number | null = null;
+    const renderSessionRecord = (record: SessionMatchRecord): void => {
+      sessionRecordValue.textContent = `${record.wins}W - ${record.losses}L`;
+      sessionRecordBadge.dataset.result = record.lastOutcome ?? 'idle';
+      sessionRecordBadge.title = `Session Record: ${record.wins} Wins, ${record.losses} Losses (${record.matchesPlayed} Matches)`;
+
+      if (record.streak >= 2) {
+        sessionRecordStreak.hidden = false;
+        sessionRecordStreak.textContent = `${record.streak} STREAK`;
+      } else {
+        sessionRecordStreak.hidden = true;
+        sessionRecordStreak.textContent = '';
+      }
+
+      if (lastMatchesPlayed !== null && record.matchesPlayed !== lastMatchesPlayed) {
+        sessionRecordBadge.classList.remove('is-updated');
+        void sessionRecordBadge.offsetWidth;
+        sessionRecordBadge.classList.add('is-updated');
+      }
+      lastMatchesPlayed = record.matchesPlayed;
+    };
+
+    sessionRecordStore.subscribe(renderSessionRecord);
+  }
+
+  window.addEventListener('pointerdown', unlockAudioContext, { passive: true });
+  window.addEventListener('keydown', unlockAudioContext, { passive: true });
+
+  root.addEventListener('pointerover', (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    const button = target.closest('button');
+    if (!button || button.disabled) {
+      return;
+    }
+    const related = event.relatedTarget;
+    if (related instanceof Node && button.contains(related)) {
+      return;
+    }
+    playUiHoverSound(settingsStore.getState());
+  });
+
+  if (gameViewport) {
+    mountAccountModal(gameViewport, () => game);
+  }
+
+  const MENU_BG_SCENES = new Set<SceneKey>([
+    SCENE_KEYS.MainMenu,
+    SCENE_KEYS.ModeSelect,
+    SCENE_KEYS.LevelSelect,
+    SCENE_KEYS.CharacterSelect,
+    SCENE_KEYS.Settings
+  ]);
+
+  const syncSplashBackdrop = (activeScene: SceneKey): void => {
+    const isSplash = activeScene === SCENE_KEYS.Boot || activeScene === SCENE_KEYS.Splash;
+    const isMenu = MENU_BG_SCENES.has(activeScene);
+    gameRoot.classList.toggle('is-splash-bg', isSplash);
+    gameRoot.classList.toggle('is-menu-bg', isMenu);
+  };
+
+  syncSplashBackdrop(debugStore.getState().activeScene);
+  debugStore.subscribe((state) => {
+    syncSplashBackdrop(state.activeScene);
+  });
+
+  if (bgmMuteToggle) {
+    const music = getBackgroundMusic();
+    const iconEl = bgmMuteToggle.querySelector<HTMLElement>('.bgm-mute-toggle__icon');
+    const labelEl = bgmMuteToggle.querySelector<HTMLElement>('.bgm-mute-toggle__label');
+
+    const renderBgmButton = (): void => {
+      const settings = settingsStore.getState();
+      const status = music.getStatus();
+      const isMuted = music.isPaused() || settings.muted || settings.musicVolume <= 0;
+      bgmMuteToggle.dataset.muted = String(isMuted);
+      bgmMuteToggle.setAttribute('aria-pressed', String(isMuted));
+      if (iconEl) {
+        iconEl.textContent = isMuted ? '🔇' : '🔊';
+      }
+      if (labelEl) {
+        labelEl.textContent = isMuted ? '24H MUTED' : 'RYU 24H';
+      }
+      bgmMuteToggle.title = `${status.title} • 24H Loop (${formatDurationHms(status.remainingSeconds)} left) — Click or press N`;
+    };
+
+    music.subscribePause(renderBgmButton);
+    music.subscribeStatus(renderBgmButton);
+    settingsStore.subscribe(renderBgmButton);
+
+    bgmMuteToggle.addEventListener('pointerdown', (event) => {
+      event.stopPropagation();
+    });
+
+    bgmMuteToggle.addEventListener('click', (event) => {
+      event.stopPropagation();
+      void music.resumeIfSuspended();
+      const settings = settingsStore.getState();
+      const currentlyMuted = music.isPaused() || settings.muted || settings.musicVolume <= 0;
+
+      if (currentlyMuted) {
+        if (settings.muted || settings.musicVolume <= 0) {
+          settingsStore.patchState({
+            muted: false,
+            musicVolume: settings.musicVolume <= 0 ? 0.55 : settings.musicVolume
+          });
+        }
+        music.setPaused(false);
+      } else {
+        music.setPaused(true);
+      }
+
+      renderBgmButton();
+      bgmMuteToggle.blur();
+    });
+  }
 
   const context: AppContext = {
     debugStore,

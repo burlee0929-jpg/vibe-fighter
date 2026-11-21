@@ -1,5 +1,6 @@
 import * as Phaser from 'phaser';
 
+import { createAnimatedArcadeTitle } from '../game/animatedTitle';
 import { AUDIO_KEYS, playAudioCue } from '../game/core/audio';
 import { GAME_TAGLINE, GAME_TITLE } from '../game/constants';
 import { createTextButton, type TextButton } from '../game/ui';
@@ -31,8 +32,18 @@ export class MainMenuScene extends BaseScene {
     this.options = [];
 
     this.markActiveScene(SCENE_KEYS.MainMenu);
-    this.cameras.main.setBackgroundColor(0x020617);
-    this.createHeading(GAME_TITLE, GAME_TAGLINE);
+    this.startSceneTransition({ withMenuFx: true, fxIntensity: 'menu' });
+    this.cameras.main.setBackgroundColor('rgba(0, 0, 0, 0)');
+    createAnimatedArcadeTitle(this, {
+      x: this.cameras.main.centerX,
+      y: 54,
+      title: GAME_TITLE,
+      tagline: GAME_TAGLINE,
+      fontSize: 34,
+      taglineOffsetY: 44,
+      depth: 4,
+      compact: true
+    });
 
     this.renderMenu();
 
@@ -74,21 +85,22 @@ export class MainMenuScene extends BaseScene {
   private renderMenu(): void {
     this.clearButtons();
 
-    const playOption: MenuOption = { label: 'Play', action: () => this.scene.start(SCENE_KEYS.ModeSelect) };
-    const settingsOption: MenuOption = { label: 'Settings', action: () => this.scene.start(SCENE_KEYS.Settings) };
+    const playOption: MenuOption = { label: 'PLAY', action: () => this.scene.start(SCENE_KEYS.ModeSelect) };
+    const settingsOption: MenuOption = { label: 'SETTINGS', action: () => this.scene.start(SCENE_KEYS.Settings) };
     this.options = [playOption, settingsOption];
 
-    const startY = 164;
-    const spacing = 55;
+    const startY = 268;
+    const spacing = 82;
     let row = 0;
 
     const layoutButton = (option: MenuOption, optionIndex: number): void => {
       const button = createTextButton(this, {
         x: this.cameras.main.centerX,
         y: startY + row * spacing,
-        width: 360,
-        height: 56,
+        width: 380,
+        height: 62,
         label: option.label,
+        entranceDelay: 120 + row * 90,
         onClick: () => this.confirmOption(option),
         onHover: () => this.setSelection(optionIndex)
       });

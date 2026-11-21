@@ -1,3 +1,4 @@
+import { createAnimatedArcadeTitle, createAnimatedPrompt } from '../game/animatedTitle';
 import { AUDIO_KEYS, playAudioCue } from '../game/core/audio';
 import { GAME_TAGLINE, GAME_TITLE } from '../game/constants';
 import { SCENE_KEYS } from '../game/types';
@@ -11,36 +12,29 @@ export class SplashScene extends BaseScene {
   }
 
   create(): void {
+    this.hasAdvanced = false;
     this.markActiveScene(SCENE_KEYS.Splash);
+    this.startSceneTransition({ withMenuFx: true, fxIntensity: 'splash' });
 
     const camera = this.cameras.main;
-    camera.setBackgroundColor(0x020617);
+    camera.setBackgroundColor('rgba(0, 0, 0, 0)');
 
-    this.add
-      .text(camera.centerX, 88, GAME_TITLE.toUpperCase(), {
-        color: '#f8fafc',
-        fontFamily: 'monospace',
-        fontSize: '46px',
-        stroke: '#0f172a',
-        strokeThickness: 8
-      })
-      .setOrigin(0.5)
-      .setDepth(2);
+    createAnimatedArcadeTitle(this, {
+      x: camera.centerX,
+      y: 108,
+      title: GAME_TITLE,
+      tagline: GAME_TAGLINE,
+      fontSize: 50,
+      taglineOffsetY: 58,
+      depth: 4
+    });
 
-    if (GAME_TAGLINE) {
-      this.add
-        .text(camera.centerX, 132, GAME_TAGLINE, {
-          color: '#f8fafc',
-          fontFamily: 'monospace',
-          fontSize: '18px',
-          stroke: '#0f172a',
-          strokeThickness: 5
-        })
-        .setOrigin(0.5)
-        .setDepth(2);
-    }
-
-    this.createFooterHint(this.app.isMobileShell ? 'Tap screen to begin' : 'Press any key to begin');
+    createAnimatedPrompt(this, {
+      x: camera.centerX,
+      y: camera.height - 40,
+      label: this.app.isMobileShell ? 'Tap screen to begin' : 'Press any key to begin',
+      depth: 100
+    });
 
     const advanceToMenu = (): void => {
       if (this.hasAdvanced) {

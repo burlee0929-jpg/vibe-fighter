@@ -35,7 +35,8 @@ export class SettingsScene extends BaseScene {
 
   create(): void {
     this.markActiveScene(SCENE_KEYS.Settings);
-    this.cameras.main.setBackgroundColor(0x020617);
+    this.startSceneTransition({ withMenuFx: true, fxIntensity: 'menu' });
+    this.cameras.main.setBackgroundColor('rgba(0, 0, 0, 0)');
     this.createHeading('Settings', '');
 
     const centerX = this.cameras.main.centerX;
@@ -64,6 +65,7 @@ export class SettingsScene extends BaseScene {
       width: halfButtonWidth,
       height: buttonHeight,
       label: 'SFX -',
+      entranceDelay: 60,
       onClick: () => this.changeVolume('sfx', -0.1),
       onHover: () => this.setSelection(0)
     });
@@ -74,6 +76,7 @@ export class SettingsScene extends BaseScene {
       width: halfButtonWidth,
       height: buttonHeight,
       label: 'SFX +',
+      entranceDelay: 90,
       onClick: () => this.changeVolume('sfx', 0.1),
       onHover: () => this.setSelection(0)
     });
@@ -84,6 +87,7 @@ export class SettingsScene extends BaseScene {
       width: halfButtonWidth,
       height: buttonHeight,
       label: 'Music -',
+      entranceDelay: 120,
       onClick: () => this.changeVolume('music', -0.1),
       onHover: () => this.setSelection(1)
     });
@@ -94,6 +98,7 @@ export class SettingsScene extends BaseScene {
       width: halfButtonWidth,
       height: buttonHeight,
       label: 'Music +',
+      entranceDelay: 150,
       onClick: () => this.changeVolume('music', 0.1),
       onHover: () => this.setSelection(1)
     });
@@ -104,6 +109,7 @@ export class SettingsScene extends BaseScene {
       width: wideButtonWidth,
       height: buttonHeight,
       label: 'Toggle mute',
+      entranceDelay: 180,
       onClick: () => this.toggleMute(),
       onHover: () => this.setSelection(2)
     });
@@ -114,6 +120,7 @@ export class SettingsScene extends BaseScene {
       width: wideButtonWidth,
       height: buttonHeight,
       label: 'Reset defaults',
+      entranceDelay: 210,
       onClick: () => this.app.settingsStore.setState(DEFAULT_SETTINGS),
       onHover: () => this.setSelection(3)
     });
@@ -124,6 +131,7 @@ export class SettingsScene extends BaseScene {
       width: wideButtonWidth,
       height: buttonHeight,
       label: 'Back to menu',
+      entranceDelay: 240,
       onClick: () => this.goToMenu(),
       onHover: () => this.setSelection(4)
     });

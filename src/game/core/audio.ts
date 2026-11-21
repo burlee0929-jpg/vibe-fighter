@@ -30,7 +30,8 @@ export interface GeneratedAudioCue {
 }
 
 export const AUDIO_KEYS = {
-  uiConfirm: 'ui-confirm'
+  uiConfirm: 'ui-confirm',
+  uiHover: 'ui-hover'
 } as const;
 
 export type AudioKey = (typeof AUDIO_KEYS)[keyof typeof AUDIO_KEYS];
@@ -39,6 +40,7 @@ export const STARTER_AUDIO_ASSETS: StarterAudioAsset[] = [
   audio(AUDIO_KEYS.uiConfirm, 'sfx', '/assets/audio/sfx/ui-confirm.mp3', 0.38, false, 'menu confirmation cue')
 ];
 export const STARTER_AUDIO_CUES: GeneratedAudioCue[] = [
+  cue(AUDIO_KEYS.uiHover, 'sfx', 740, 0.045, 0.16, 'ui button hover cue'),
   cue('starter-jump', 'sfx', 380, 0.08, 0.34, 'generated jump cue'),
   cue('starter-pickup', 'sfx', 720, 0.1, 0.38, 'generated pickup cue'),
   cue('starter-complete', 'sfx', 520, 0.18, 0.42, 'generated level complete cue'),
@@ -46,6 +48,7 @@ export const STARTER_AUDIO_CUES: GeneratedAudioCue[] = [
 ];
 
 let audioContext: AudioContext | null = null;
+let lastHoverSoundAt = 0;
 
 export function getEffectiveVolume(
   assetVolume: number,
@@ -195,6 +198,70 @@ function audio(
     loop,
     usage
   };
+}
+
+export function playUiHoverSound(settings?: GameSettings): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const effective = settings
+    ? getEffectiveVolume(0.14, 'sfx', settings)
+    : 0.14;
+
+  if (effective <= 0) {
+    return;
+  }
+
+  const nowMs = performance.now();
+  if (nowMs - lastHoverSoundAt < 40) {
+    return;
+  }
+  lastHoverSoundAt = nowMs;
+
+  try {
+    const ctx = getAudioContext();
+    if (ctx.state === 'suspended') {
+      void ctx.resume().catch(() => {});
+      if (ctx.state === 'suspended') {
+        return;
+      }
+    }
+
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(660, now);
+    osc.frequency.exponentialRampToValueAtTime(980, now + 0.042);
+
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.linearRampToValueAtTime(effective, now + 0.006);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.048);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.055);
+  } catch {
+    // Ignore audio context errors on restricted browsers
+  }
+}
+
+export function unlockAudioContext(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    const ctx = getAudioContext();
+    if (ctx.state === 'suspended') {
+      void ctx.resume().catch(() => {});
+    }
+  } catch {
+    // Ignore audio context errors
+  }
 }
 
 function getAudioContext(): AudioContext {

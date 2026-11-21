@@ -1,5 +1,9 @@
 import * as Phaser from 'phaser';
 
+import { getAppContext } from './context';
+import { playUiHoverSound } from './core/audio';
+import { spawnBurstSparks } from './menuFx';
+
 export interface TextButton {
   group: Phaser.GameObjects.Container;
   setSelected(selected: boolean): void;
@@ -12,33 +16,69 @@ interface TextButtonConfig {
   width: number;
   height: number;
   label: string;
+  entranceDelay?: number;
   onClick(): void;
   onHover?(): void;
 }
 
 export function createTextButton(scene: Phaser.Scene, config: TextButtonConfig): TextButton {
-  const background = scene.add.image(config.x, config.y, 'ui-button');
-  const label = scene.add.text(config.x, config.y, config.label, {
+  const background = scene.add.image(0, 0, 'ui-button');
+  const label = scene.add.text(0, 0, config.label, {
     color: '#e2e8f0',
-    fontFamily: 'monospace',
-    fontSize: '22px'
+    fontFamily: '"Silkscreen", "Press Start 2P", monospace',
+    fontSize: '20px',
+    stroke: '#090d16',
+    strokeThickness: 5
   });
 
   background.setDisplaySize(config.width, config.height);
   background.setInteractive({ useHandCursor: true });
   label.setOrigin(0.5);
 
-  const group = scene.add.container(0, 0, [background, label]);
+  const group = scene.add.container(config.x, config.y, [background, label]).setDepth(5);
+  let isSelected = false;
+  let scaleTween: Phaser.Tweens.Tween | null = null;
+
+  group.setScale(0.84).setAlpha(0);
+  scene.tweens.add({
+    targets: group,
+    scale: isSelected ? 1.05 : 1,
+    alpha: 1,
+    duration: 280,
+    delay: config.entranceDelay ?? 0,
+    ease: 'Back.easeOut'
+  });
 
   const setSelected = (selected: boolean): void => {
+    const changed = isSelected !== selected;
+    isSelected = selected;
     background.setTexture(selected ? 'ui-button-active' : 'ui-button');
-    label.setColor(selected ? '#f8fafc' : '#e2e8f0');
+    label.setColor(selected ? '#fef08a' : '#e2e8f0');
+
+    if (changed && group.scene && group.alpha > 0.2) {
+      scaleTween?.stop();
+      scaleTween = scene.tweens.add({
+        targets: group,
+        scale: selected ? 1.05 : 1,
+        duration: 150,
+        ease: 'Back.easeOut'
+      });
+    }
   };
 
   background.on('pointerover', () => {
+    playUiHoverSound(getAppContext().settingsStore.getState());
     config.onHover?.();
   });
   background.on('pointerdown', () => {
+    scaleTween?.stop();
+    group.setScale(0.95);
+    scaleTween = scene.tweens.add({
+      targets: group,
+      scale: isSelected ? 1.05 : 1,
+      duration: 140,
+      ease: 'Back.easeOut'
+    });
     config.onClick();
   });
 
@@ -48,6 +88,7 @@ export function createTextButton(scene: Phaser.Scene, config: TextButtonConfig):
     group,
     setSelected,
     destroy: () => {
+      scaleTween?.stop();
       group.destroy(true);
     }
   };
@@ -73,6 +114,9 @@ export interface SelectionCardConfig {
   imageMaxSize?: number;
   /** Vertical offset of the image centre from the card centre. */
   imageOffsetY?: number;
+  /** Optional font size for the card title (defaults to '20px'). */
+  titleFontSize?: string;
+  entranceDelay?: number;
   onClick?: () => void;
   onHover?: () => void;
 }
@@ -88,11 +132,15 @@ const CARD_BASE_STROKE = 0x334155;
  * @returns A {@link SelectionCard} handle.
  */
 export function createSelectionCard(scene: Phaser.Scene, config: SelectionCardConfig): SelectionCard {
+  const glow = scene.add
+    .rectangle(0, 0, config.width + 10, config.height + 10, 0x38bdf8, 0)
+    .setBlendMode(Phaser.BlendModes.ADD);
+
   const background = scene.add
     .rectangle(0, 0, config.width, config.height, 0x0f172a, 0.92)
     .setStrokeStyle(2, CARD_BASE_STROKE, 1);
 
-  const children: Phaser.GameObjects.GameObject[] = [background];
+  const children: Phaser.GameObjects.GameObject[] = [glow, background];
 
   if (config.texture) {
     const image = scene.add.image(0, config.imageOffsetY ?? -18, config.texture).setOrigin(0.5);
@@ -102,14 +150,16 @@ export function createSelectionCard(scene: Phaser.Scene, config: SelectionCardCo
     children.push(image);
   }
 
-  const subtitleY = config.height / 2 - 20;
-  const titleY = config.subtitle ? subtitleY - 26 : subtitleY;
+  const subtitleY = config.height / 2 - 18;
+  const titleY = config.subtitle ? subtitleY - 22 : subtitleY;
 
   const title = scene.add
     .text(0, titleY, config.title, {
       color: '#f8fafc',
-      fontFamily: 'monospace',
-      fontSize: '20px',
+      fontFamily: '"Silkscreen", monospace',
+      fontSize: config.titleFontSize ?? '19px',
+      stroke: '#090d16',
+      strokeThickness: 4,
       align: 'center'
     })
     .setOrigin(0.5);
@@ -119,8 +169,8 @@ export function createSelectionCard(scene: Phaser.Scene, config: SelectionCardCo
     const subtitle = scene.add
       .text(0, subtitleY, config.subtitle, {
         color: '#94a3b8',
-        fontFamily: 'monospace',
-        fontSize: '13px',
+        fontFamily: '"Silkscreen", monospace',
+        fontSize: '12px',
         align: 'center'
       })
       .setOrigin(0.5);
@@ -132,16 +182,48 @@ export function createSelectionCard(scene: Phaser.Scene, config: SelectionCardCo
     .setOrigin(0.5);
   children.push(flash);
 
-  const container = scene.add.container(config.x, config.y, children);
+  const container = scene.add.container(config.x, config.y + 18, children).setDepth(5);
+  let isSelected = false;
+  let scaleTween: Phaser.Tweens.Tween | null = null;
+  let entered = false;
+
+  container.setScale(0.88).setAlpha(0);
+  scene.tweens.add({
+    targets: container,
+    y: config.y,
+    scale: isSelected ? 1.06 : 1,
+    alpha: 1,
+    duration: 280,
+    delay: config.entranceDelay ?? 0,
+    ease: 'Back.easeOut',
+    onComplete: () => {
+      entered = true;
+    }
+  });
 
   background.setInteractive({ useHandCursor: true });
-  background.on('pointerover', () => config.onHover?.());
+  background.on('pointerover', () => {
+    playUiHoverSound(getAppContext().settingsStore.getState());
+    config.onHover?.();
+  });
   background.on('pointerdown', () => config.onClick?.());
 
   const setSelected = (selected: boolean, accent: number = 0x38bdf8): void => {
+    const changed = isSelected !== selected;
+    isSelected = selected;
     background.setStrokeStyle(selected ? 4 : 2, selected ? accent : CARD_BASE_STROKE, 1);
-    container.setScale(selected ? 1.05 : 1);
-    title.setColor(selected ? '#ffffff' : '#f8fafc');
+    glow.setFillStyle(accent, selected ? 0.16 : 0);
+    title.setColor(selected ? '#fef08a' : '#f8fafc');
+
+    if (changed && entered && container.scene) {
+      scaleTween?.stop();
+      scaleTween = scene.tweens.add({
+        targets: container,
+        scale: selected ? 1.06 : 1,
+        duration: 160,
+        ease: 'Back.easeOut'
+      });
+    }
   };
 
   const setDimmed = (dimmed: boolean): void => {
@@ -149,6 +231,14 @@ export function createSelectionCard(scene: Phaser.Scene, config: SelectionCardCo
   };
 
   const flashLock = (onComplete: () => void): void => {
+    spawnBurstSparks(scene, container.x, container.y, 0xfef08a, 12, 25, 1);
+    scene.tweens.add({
+      targets: container,
+      scale: 1.12,
+      duration: 120,
+      yoyo: true,
+      ease: 'Quad.easeOut'
+    });
     scene.tweens.add({
       targets: flash,
       alpha: { from: 0, to: 0.85 },
@@ -170,6 +260,7 @@ export function createSelectionCard(scene: Phaser.Scene, config: SelectionCardCo
     setDimmed,
     flashLock,
     destroy: () => {
+      scaleTween?.stop();
       container.destroy(true);
     }
   };

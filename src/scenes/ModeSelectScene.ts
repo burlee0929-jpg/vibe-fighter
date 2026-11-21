@@ -36,8 +36,9 @@ export class ModeSelectScene extends BaseScene {
     this.selectedIndex = 0;
 
     this.markActiveScene(SCENE_KEYS.ModeSelect);
-    this.cameras.main.setBackgroundColor(0x020617);
-    this.createHeading('Select Mode', 'How do you want to play?');
+    this.startSceneTransition({ withMenuFx: true, fxIntensity: 'menu' });
+    this.cameras.main.setBackgroundColor('rgba(0, 0, 0, 0)');
+    this.createHeading('Select Mode', 'Street Fighter • Choose your match format');
 
     this.buildCards();
     this.registerInput();
@@ -70,6 +71,7 @@ export class ModeSelectScene extends BaseScene {
         texture: option.texture,
         imageMaxSize: 168,
         imageOffsetY: -46,
+        entranceDelay: index * 100,
         onHover: () => this.setSelection(index),
         onClick: () => this.confirm(index)
       });

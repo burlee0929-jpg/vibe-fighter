@@ -83,27 +83,27 @@ const BAYASAA_ACTIONS: FighterActionSpec[] = [
     label: 'Light Punch',
     file: 'light-punch.png',
     frames: 6,
-    frameRate: 14,
+    frameRate: 16,
     repeat: 0,
     defaultVisual: rect(60, 28, 128, 204),
-    attack: { frames: [2, 3], bounds: rect(18, 84, 84, 46) }
+    attack: { frames: [1, 2, 3, 4], bounds: rect(6, 70, 122, 68) }
   },
   {
     action: 'heavy-kick',
     label: 'Spinning High Kick',
     file: 'heavy-kick.png',
     frames: 8,
-    frameRate: 10,
+    frameRate: 13,
     repeat: 0,
     defaultVisual: rect(64, 28, 128, 204),
-    attack: { frames: [2, 3, 4], bounds: rect(20, 48, 110, 80) }
+    attack: { frames: [1, 2, 3, 4, 5], bounds: rect(4, 34, 144, 102) }
   },
   {
     action: 'special-charge',
     label: 'Special Charge',
     file: 'special-charge.png',
     frames: 5,
-    frameRate: 12,
+    frameRate: 14,
     repeat: 0,
     defaultVisual: rect(72, 40, 112, 192)
   },
@@ -112,13 +112,13 @@ const BAYASAA_ACTIONS: FighterActionSpec[] = [
     label: 'Cyclone Kick Blitz',
     file: 'special.png',
     frames: 12,
-    frameRate: 14,
+    frameRate: 15,
     repeat: 0,
     defaultVisual: rect(60, 24, 136, 208),
     attackSpans: [
-      { frames: [2, 3], bounds: rect(20, 48, 110, 80) },
-      { frames: [4, 5], bounds: rect(16, 36, 120, 90) },
-      { frames: [6, 7, 8], bounds: rect(12, 30, 130, 100) }
+      { frames: [1, 2, 3], bounds: rect(6, 40, 140, 96) },
+      { frames: [4, 5], bounds: rect(4, 30, 148, 108) },
+      { frames: [6, 7, 8, 9], bounds: rect(0, 24, 158, 118) }
     ]
   },
   {

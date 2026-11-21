@@ -26,11 +26,11 @@
       "scale": 1.6
     },
     "bayasaa": {
-      "walkSpeed": 255,
-      "airDrift": 200,
-      "jump": 1020,
+      "walkSpeed": 410,
+      "airDrift": 340,
+      "jump": 1220,
       "gravity": 2300,
-      "scale": 1.4
+      "scale": 1.52
     }
   },
   "combat": {
@@ -71,16 +71,16 @@
       "specialHitstun": 220
     },
     "bayasaa": {
-      "maxHealth": 110,
-      "highDamage": 8,
-      "highKnockback": 200,
-      "highHitstun": 290,
-      "lowDamage": 15,
-      "lowKnockback": 360,
-      "lowHitstun": 460,
-      "specialDamage": 8,
-      "specialKnockback": 200,
-      "specialHitstun": 260
+      "maxHealth": 220,
+      "highDamage": 18,
+      "highKnockback": 230,
+      "highHitstun": 480,
+      "lowDamage": 28,
+      "lowKnockback": 450,
+      "lowHitstun": 680,
+      "specialDamage": 18,
+      "specialKnockback": 260,
+      "specialHitstun": 420
     }
   }
 }

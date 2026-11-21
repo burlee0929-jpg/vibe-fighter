@@ -1,5 +1,9 @@
 import * as Phaser from 'phaser';
 
+import { getHeroAbilityKit } from './abilities';
+import { getAppContext } from './context';
+import { playUiHoverSound } from './core/audio';
+import type { FighterAbilityState, FighterM1State } from './fighter';
 import { FIGHTING_UI_ATLAS_TEXTURE_KEY, getFightingUiAtlasFrame } from './fightingUiAtlas';
 import { getCharacterDefinition } from './hero';
 import type { MatchMode } from './types';
@@ -24,6 +28,12 @@ const METER_DISP_H = 12;
 const METER_TRACK_COLOR = 0x0b1120;
 const METER_FILL_COLOR = 0x38bdf8;
 const METER_READY_COLOR = 0xfacc15;
+
+// Ability + M1 bar geometry (anchored at the bottom foreground strip).
+const ABILITY_CARD_W = 106;
+const ABILITY_CARD_H = 54;
+const ABILITY_CARD_GAP = 6;
+const ABILITY_BOTTOM_OFFSET = 64;
 
 // Health colour thresholds (fraction of max).
 const HEALTH_WARN = 0.5;
@@ -50,12 +60,25 @@ interface MeterGeometry {
   originX: 0 | 1;
 }
 
+interface AbilityCardWidget {
+  slot: 0 | 1 | 2 | 3 | 4;
+  themeColor: number;
+  bg: Phaser.GameObjects.Rectangle;
+  barFill: Phaser.GameObjects.Rectangle;
+  keyBadge: Phaser.GameObjects.Text;
+  notationText: Phaser.GameObjects.Text;
+  nameText: Phaser.GameObjects.Text;
+  statusText: Phaser.GameObjects.Text;
+}
+
 export interface MatchHudConfig {
   mode: MatchMode;
   p1CharacterId: string;
   p2CharacterId: string;
   roundsToWin: number;
   depth: number;
+  onAbilityClick?: (slot: 1 | 2 | 3 | 4) => void;
+  onM1Click?: () => void;
 }
 
 /**
@@ -68,6 +91,11 @@ export class MatchHud {
   private readonly scene: Phaser.Scene;
   private readonly config: MatchHudConfig;
   private readonly root: Phaser.GameObjects.Container;
+  private readonly abilitiesRoot: Phaser.GameObjects.Container;
+  private p1AbilityCards: AbilityCardWidget[] = [];
+  private p2AbilityCards: AbilityCardWidget[] = [];
+  private p1M1Card!: AbilityCardWidget;
+  private p2M1Card!: AbilityCardWidget;
 
   private p1Fill!: Phaser.GameObjects.Image;
   private p2Fill!: Phaser.GameObjects.Image;
@@ -99,6 +127,7 @@ export class MatchHud {
     this.scene = scene;
     this.config = config;
     this.root = scene.add.container(0, 0).setDepth(config.depth).setScrollFactor(0);
+    this.abilitiesRoot = scene.add.container(0, 0).setDepth(config.depth).setScrollFactor(0);
 
     this.build();
   }
@@ -131,9 +160,215 @@ export class MatchHud {
     // --- Timer (centre) ---
     this.buildTimer(camWidth / 2);
 
+    // --- Abilities Bar (bottom foreground) ---
+    this.buildAbilityBars();
+
     this.applyHealth(1, 1);
     this.setMeter(0, 0);
     this.updateWins(0, 0);
+  }
+
+  private buildAbilityBars(): void {
+    const cam = this.scene.cameras.main;
+    const centerY = cam.height - ABILITY_BOTTOM_OFFSET;
+
+    const p1Theme = getHeroAbilityKit(this.config.p1CharacterId).themeColor;
+    const p2Theme = getHeroAbilityKit(this.config.p2CharacterId).themeColor;
+
+    const p1Slots: Array<{ slot: 0 | 1 | 2 | 3 | 4; keyLabel: string }> = [
+      { slot: 0, keyLabel: 'M1/F' },
+      { slot: 1, keyLabel: '1/Q' },
+      { slot: 2, keyLabel: '2/E' },
+      { slot: 3, keyLabel: '3/R' },
+      { slot: 4, keyLabel: '4/T' }
+    ];
+
+    const p1Widgets = p1Slots.map((entry, idx) => {
+      const cx = PAD + ABILITY_CARD_W / 2 + idx * (ABILITY_CARD_W + ABILITY_CARD_GAP);
+      return this.createAbilityCard(cx, centerY, entry.slot, entry.keyLabel, true, p1Theme);
+    });
+    this.p1M1Card = p1Widgets[0];
+    this.p1AbilityCards = p1Widgets.slice(1);
+
+    const p2Slots: Array<{ slot: 0 | 1 | 2 | 3 | 4; keyLabel: string }> = [
+      { slot: 0, keyLabel: this.config.mode === '1vcpu' ? 'CPU' : 'M1/,' },
+      { slot: 1, keyLabel: this.config.mode === '1vcpu' ? 'CPU' : '7/U' },
+      { slot: 2, keyLabel: this.config.mode === '1vcpu' ? 'CPU' : '8/I' },
+      { slot: 3, keyLabel: this.config.mode === '1vcpu' ? 'CPU' : '9/O' },
+      { slot: 4, keyLabel: this.config.mode === '1vcpu' ? 'CPU' : '0/P' }
+    ];
+
+    const totalW = p2Slots.length * ABILITY_CARD_W + (p2Slots.length - 1) * ABILITY_CARD_GAP;
+    const startX = cam.width - PAD - totalW + ABILITY_CARD_W / 2;
+
+    const p2Widgets = p2Slots.map((entry, idx) => {
+      const cx = startX + idx * (ABILITY_CARD_W + ABILITY_CARD_GAP);
+      return this.createAbilityCard(cx, centerY, entry.slot, entry.keyLabel, false, p2Theme);
+    });
+    this.p2M1Card = p2Widgets[0];
+    this.p2AbilityCards = p2Widgets.slice(1);
+  }
+
+  private createAbilityCard(
+    cx: number,
+    cy: number,
+    slot: 0 | 1 | 2 | 3 | 4,
+    keyLabel: string,
+    clickable: boolean,
+    themeColor: number
+  ): AbilityCardWidget {
+    const bg = this.scene.add
+      .rectangle(cx, cy, ABILITY_CARD_W, ABILITY_CARD_H, 0x090d1c, 0.86)
+      .setStrokeStyle(2, 0x334155, 1);
+
+    if (clickable) {
+      if (slot === 0 && this.config.onM1Click) {
+        bg.setInteractive({ useHandCursor: true });
+        bg.on('pointerover', () => playUiHoverSound(getAppContext().settingsStore.getState()));
+        bg.on('pointerdown', () => this.config.onM1Click?.());
+      } else if (slot !== 0 && this.config.onAbilityClick) {
+        bg.setInteractive({ useHandCursor: true });
+        bg.on('pointerover', () => playUiHoverSound(getAppContext().settingsStore.getState()));
+        bg.on('pointerdown', () => this.config.onAbilityClick?.(slot));
+      }
+    }
+
+    const barTrack = this.scene.add
+      .rectangle(cx - ABILITY_CARD_W / 2 + 5, cy + ABILITY_CARD_H / 2 - 5, ABILITY_CARD_W - 10, 4, 0x1e293b, 1)
+      .setOrigin(0, 0.5);
+
+    const barFill = this.scene.add
+      .rectangle(cx - ABILITY_CARD_W / 2 + 5, cy + ABILITY_CARD_H / 2 - 5, ABILITY_CARD_W - 10, 4, themeColor, 1)
+      .setOrigin(0, 0.5);
+
+    const keyBadge = this.scene.add
+      .text(cx - ABILITY_CARD_W / 2 + 5, cy - ABILITY_CARD_H / 2 + 5, keyLabel, {
+        color: '#facc15',
+        fontFamily: 'monospace',
+        fontSize: '9.5px',
+        fontStyle: 'bold'
+      })
+      .setOrigin(0, 0);
+
+    const notationText = this.scene.add
+      .text(cx + ABILITY_CARD_W / 2 - 5, cy - ABILITY_CARD_H / 2 + 5, '', {
+        color: '#94a3b8',
+        fontFamily: 'monospace',
+        fontSize: '9.5px'
+      })
+      .setOrigin(1, 0);
+
+    const nameText = this.scene.add
+      .text(cx, cy - 1, '', {
+        color: '#f8fafc',
+        fontFamily: 'monospace',
+        fontSize: '10.5px',
+        fontStyle: 'bold'
+      })
+      .setOrigin(0.5);
+
+    const statusText = this.scene.add
+      .text(cx, cy + 13, '', {
+        color: '#86efac',
+        fontFamily: 'monospace',
+        fontSize: '9.5px',
+        fontStyle: 'bold'
+      })
+      .setOrigin(0.5);
+
+    this.abilitiesRoot.add([bg, barTrack, barFill, keyBadge, notationText, nameText, statusText]);
+
+    return { slot, themeColor, bg, barFill, keyBadge, notationText, nameText, statusText };
+  }
+
+  /** Updates the on-screen ability cards and M1 combo indicator for both fighters every frame. */
+  updateAbilities(
+    p1Abilities: FighterAbilityState[],
+    p2Abilities: FighterAbilityState[],
+    p1M1?: FighterM1State,
+    p2M1?: FighterM1State
+  ): void {
+    this.renderAbilitySet(this.p1AbilityCards, p1Abilities);
+    this.renderAbilitySet(this.p2AbilityCards, p2Abilities);
+    if (p1M1) {
+      this.renderM1Card(this.p1M1Card, p1M1);
+    }
+    if (p2M1) {
+      this.renderM1Card(this.p2M1Card, p2M1);
+    }
+  }
+
+  private renderM1Card(widget: AbilityCardWidget, state: FighterM1State): void {
+    const barMaxW = ABILITY_CARD_W - 10;
+    const step = state.step;
+    const frac = step > 0 ? step / 4 : 1;
+
+    widget.notationText.setText(step > 0 ? `${step}/4` : '4-HIT');
+    widget.nameText.setText(state.moveName.length > 13 ? `${state.moveName.slice(0, 12)}.` : state.moveName);
+
+    if (step === 4) {
+      widget.barFill.setDisplaySize(barMaxW, 4).setFillStyle(0xfacc15, 1).setVisible(true);
+      widget.bg.setStrokeStyle(3, 0xfacc15, 1);
+      widget.statusText.setText('FINISHER!').setColor('#fde047');
+      widget.nameText.setColor('#fef08a');
+    } else if (step > 0) {
+      widget.barFill.setDisplaySize(Math.max(4, barMaxW * frac), 4).setFillStyle(0x38bdf8, 1).setVisible(true);
+      widget.bg.setStrokeStyle(2.5, 0x38bdf8, 1);
+      widget.statusText.setText(`HIT ${step}/4`).setColor('#7dd3fc');
+      widget.nameText.setColor('#ffffff');
+    } else {
+      widget.barFill.setDisplaySize(barMaxW, 4).setFillStyle(widget.themeColor, 1).setVisible(true);
+      widget.bg.setStrokeStyle(2, widget.themeColor, 1);
+      widget.statusText.setText('M1 COMBO').setColor('#86efac');
+      widget.nameText.setColor('#f8fafc');
+    }
+  }
+
+  private renderAbilitySet(widgets: AbilityCardWidget[], states: FighterAbilityState[]): void {
+    const barMaxW = ABILITY_CARD_W - 10;
+
+    for (const widget of widgets) {
+      const state = states.find((candidate) => candidate.slot === widget.slot);
+      if (!state) {
+        continue;
+      }
+
+      widget.nameText.setText(state.name);
+      widget.notationText.setText(state.notation);
+
+      if (state.isSuper) {
+        const pct = Math.round(state.meterFrac * 100);
+        widget.barFill.setDisplaySize(Math.max(1, barMaxW * state.meterFrac), 4);
+        widget.barFill.setFillStyle(state.ready ? 0xfacc15 : 0x38bdf8, 1);
+        widget.barFill.setVisible(state.meterFrac > 0);
+        widget.bg.setStrokeStyle(state.ready ? 2.5 : 2, state.ready ? 0xfacc15 : 0x334155, 1);
+        widget.statusText.setText(state.ready ? 'READY!' : `${pct}%`).setColor(state.ready ? '#fde047' : '#7dd3fc');
+        widget.nameText.setColor(state.ready ? '#fef08a' : '#cbd5e1');
+        continue;
+      }
+
+      if (state.highlighted) {
+        widget.barFill.setDisplaySize(barMaxW, 4).setFillStyle(0xfacc15, 1).setVisible(true);
+        widget.bg.setStrokeStyle(3, 0xfacc15, 1);
+        widget.statusText.setText('CHAIN!').setColor('#fde047');
+        widget.nameText.setColor('#fef08a');
+        continue;
+      }
+
+      if (state.ready) {
+        widget.barFill.setDisplaySize(barMaxW, 4).setFillStyle(widget.themeColor, 1).setVisible(true);
+        widget.bg.setStrokeStyle(2, widget.themeColor, 1);
+        widget.statusText.setText('READY').setColor('#86efac');
+        widget.nameText.setColor('#f8fafc');
+      } else {
+        const frac =
+          state.cooldownTotal > 0 ? Phaser.Math.Clamp(1 - state.cooldownRemaining / state.cooldownTotal, 0, 1) : 0;
+        widget.barFill.setDisplaySize(Math.max(1, barMaxW * frac), 4).setFillStyle(0x64748b, 1).setVisible(frac > 0);
+        widget.bg.setStrokeStyle(2, 0x334155, 1);
+        widget.statusText.setText(`${state.cooldownRemaining.toFixed(1)}s`).setColor('#94a3b8');
+        widget.nameText.setColor('#94a3b8');
+      }
+    }
   }
 
   /**
@@ -449,6 +684,9 @@ export class MatchHud {
   slideIn(): void {
     this.root.y = -SLIDE_OFFSET;
     this.scene.tweens.add({ targets: this.root, y: 0, duration: 900, ease: 'Back.Out' });
+
+    this.abilitiesRoot.y = 95;
+    this.scene.tweens.add({ targets: this.abilitiesRoot, y: 0, duration: 700, ease: 'Cubic.Out' });
   }
 
   /**
@@ -476,6 +714,7 @@ export class MatchHud {
     this.p1MeterGlow?.stop();
     this.p2MeterGlow?.stop();
     this.root.destroy(true);
+    this.abilitiesRoot.destroy(true);
   }
 
   /**

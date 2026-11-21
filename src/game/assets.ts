@@ -8,6 +8,7 @@ import {
 } from './core/audio';
 import { GENERATED_TEXTURE_ASSETS, type GeneratedTextureAsset } from './generatedAssets';
 import { CHARACTER_ANIMATIONS, CHARACTER_ASSETS } from './hero';
+import { STAGE_IMAGE_ASSETS } from './stageConfig';
 import { TILE_ATLAS_IMAGE_URL, TILE_ATLAS_TEXTURE_KEY, TILE_ATLAS_SIZE } from './tileAtlas';
 import {
   QUEST_UI_ATLAS_IMAGE_URL,
@@ -108,6 +109,7 @@ export const MODE_CARD_IMAGE_ASSETS: ImageAsset[] = [];
 
 export const STARTER_ASSETS: StarterAsset[] = [
   ...CHARACTER_ASSETS,
+  ...STAGE_IMAGE_ASSETS,
   ...TILE_IMAGE_ASSETS,
   ...UI_IMAGE_ASSETS,
   ...STARTER_AUDIO_ASSETS

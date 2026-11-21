@@ -19,7 +19,7 @@ export function createGame(parent: HTMLElement, profile: GameProfile): Phaser.Ga
     parent,
     width: config.width,
     height: config.height,
-    backgroundColor: '#020617',
+    backgroundColor: 'rgba(0, 0, 0, 0)',
     transparent: true,
     roundPixels: false,
     // Avoid Phaser's default 120-frame delta cooldown making startup gameplay run in slow motion.

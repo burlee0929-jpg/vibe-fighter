@@ -4,6 +4,8 @@ import { RED_BRAWLER_CHARACTER } from './redBrawler';
 import { GREEN_BOXER_CHARACTER } from './greenBoxer';
 import { JIUJITSU_FIGHTER_CHARACTER } from './jiujitsuFighter';
 import { BAYASAA_CHARACTER } from './bayasaa';
+import { SUKUNA_CHARACTER } from './sukuna';
+import { CUSTOM_HERO_CHARACTERS } from './customHeroes';
 import { MY_FIGHTER_CHARACTERS } from './myFighterLoader';
 
 export interface HeroBoundsFrame {
@@ -50,6 +52,8 @@ export const CHARACTER_DEFINITIONS: CharacterDefinition[] = [
   GREEN_BOXER_CHARACTER,
   JIUJITSU_FIGHTER_CHARACTER,
   BAYASAA_CHARACTER,
+  SUKUNA_CHARACTER,
+  ...CUSTOM_HERO_CHARACTERS,
   ...MY_FIGHTER_CHARACTERS
 ];
 

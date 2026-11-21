@@ -1,0 +1,106 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "Public fighter profile and match record for an authenticated player (no PII).",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the account owner."
+        },
+        "username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 20,
+          "pattern": "^[a-zA-Z0-9_]{3,20}$",
+          "description": "Unique display username chosen by the player."
+        },
+        "usernameLower": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 20,
+          "pattern": "^[a-z0-9_]{3,20}$",
+          "description": "Lowercase normalized username used as reservation key."
+        },
+        "wins": {
+          "type": "number",
+          "description": "Total matches won by the player."
+        },
+        "losses": {
+          "type": "number",
+          "description": "Total matches lost by the player."
+        },
+        "matchesPlayed": {
+          "type": "number",
+          "description": "Total completed matches played."
+        },
+        "favoriteHero": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-z0-9\\-]+$",
+          "description": "Most recently played hero ID."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the account profile was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the account profile was last updated."
+        }
+      },
+      "required": [
+        "uid",
+        "username",
+        "usernameLower",
+        "wins",
+        "losses",
+        "matchesPlayed",
+        "favoriteHero",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "UsernameReservation": {
+      "title": "Username Reservation",
+      "description": "Maps a normalized lowercase username to its owning Firebase Auth UID to guarantee uniqueness.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Owner Firebase Auth UID."
+        },
+        "username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 20,
+          "pattern": "^[a-zA-Z0-9_]{3,20}$",
+          "description": "Original cased username."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the username was reserved."
+        }
+      },
+      "required": ["uid", "username", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Per-player profile and W/L match record."
+    },
+    "/usernames/{usernameLower}": {
+      "schema": { "$ref": "#/entities/UsernameReservation" },
+      "description": "Unique username reservation documents keyed by lowercase username."
+    }
+  }
+}

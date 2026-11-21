@@ -1,5 +1,7 @@
 import * as Phaser from 'phaser';
 
+import { getHeroAbilityKit, isAbilitySlotImmune, type HeroAbilityKit } from './abilities';
+import { BAYASAA_CHARACTER_ID } from './bayasaa';
 import type { AppContext } from './context';
 import { FIGHTER_BOUNDS_FIELDS, getAttackProfile, getFighterCombat, getFighterStats } from './fighterConfig';
 import {
@@ -11,7 +13,8 @@ import {
   type HeroAnimationDefinition,
   type HeroBoundsFrame
 } from './hero';
-import { spawnChargeAura } from './vfx';
+import type { FighterPushBox } from './pushbox';
+import { spawnChargeAura, spawnSlideDust } from './vfx';
 import type {
   AttackKind,
   AttackProfile,
@@ -52,6 +55,8 @@ export interface ActiveAttack {
   signature: number;
   /** True when this is the final hit window of a special (the combo finisher). */
   finisher: boolean;
+  /** True when this hit comes from the meter-consuming Super Art. */
+  isSuper: boolean;
 }
 
 const BOUNDS_ALPHA_ACTIVE = 0.95;
@@ -71,6 +76,25 @@ const BOUNDS_COLORS: Record<keyof FighterBoundsVisibility, number> = Object.from
  * `crouch`, `block`) describe the current key state; edge inputs (`jump`,
  * `light`, `heavy`) are true only on the frame the action was triggered.
  */
+export interface FighterAbilityState {
+  slot: 1 | 2 | 3 | 4;
+  name: string;
+  notation: string;
+  cooldownRemaining: number;
+  cooldownTotal: number;
+  ready: boolean;
+  highlighted: boolean;
+  isSuper: boolean;
+  meterFrac: number;
+}
+
+export interface FighterM1State {
+  step: 0 | 1 | 2 | 3 | 4;
+  moveName: string;
+  airMove: string;
+  active: boolean;
+}
+
 export interface FighterInput {
   left: boolean;
   right: boolean;
@@ -80,6 +104,11 @@ export interface FighterInput {
   light: boolean;
   heavy: boolean;
   special: boolean;
+  m1?: boolean;
+  ability1?: boolean;
+  ability2?: boolean;
+  ability3?: boolean;
+  ability4?: boolean;
 }
 
 /** A neutral (no-op) input snapshot. */
@@ -91,7 +120,12 @@ export const NEUTRAL_FIGHTER_INPUT: FighterInput = {
   jump: false,
   light: false,
   heavy: false,
-  special: false
+  special: false,
+  m1: false,
+  ability1: false,
+  ability2: false,
+  ability3: false,
+  ability4: false
 };
 
 interface FighterActionKeys {
@@ -104,7 +138,13 @@ interface FighterActionKeys {
   blockLow: string;
   hitHigh: string;
   lightPunch: string;
+  lightKick: string | null;
+  crouchMedium: string | null;
   heavy: string;
+  jumpHeavy: string | null;
+  specialCleave: string;
+  specialFollowup: string;
+  specialArrow: string;
   specialCharge: string;
   special: string;
   knockdown: string;
@@ -129,6 +169,19 @@ export interface FighterOptions {
    * to trigger the super cut-in cinematic.
    */
   onSpecialStart?: (fighter: Fighter) => void;
+  /** Invoked when the meter special transitions into its execution animation. */
+  onSuperExecute?: (fighter: Fighter) => void;
+  /** Invoked when a ranged special spawns a projectile. */
+  onProjectile?: (fighter: Fighter, projectileName: string) => void;
+  /** Invoked when an attack enters its active frames so host scenes can spawn slash VFX. */
+  onAttackVfx?: (
+    fighter: Fighter,
+    action: string,
+    abilitySlot: 0 | 1 | 2 | 3 | 4,
+    m1Step: 0 | 1 | 2 | 3 | 4
+  ) => void;
+  /** Invoked when a named combo / special move executes (for optional callout text). */
+  onMoveCallout?: (fighter: Fighter, moveName: string) => void;
 }
 
 /**
@@ -141,6 +194,7 @@ export class Fighter {
   private readonly scene: Phaser.Scene;
   private readonly app: AppContext;
   private readonly character: CharacterDefinition;
+  private readonly kit: HeroAbilityKit;
   private readonly actionKeys: FighterActionKeys;
   private facing: 1 | -1;
   private minX: number;
@@ -174,14 +228,41 @@ export class Fighter {
   private attackActiveLast = false;
   private meter = 0;
   private appliedScale = 0;
+  private attackElapsed = 0;
+  private attackLungeVel = 0;
+  private activeAbilitySlot: 0 | 1 | 2 | 3 | 4 = 0;
+  private m1ComboStep: 0 | 1 | 2 | 3 | 4 = 0;
+  private sliding = false;
+  private slideDustTimer = 0;
+  private projectileFiredForSwing = false;
+  private abilityCooldowns = { cleave: 0, followup: 0, arrow: 0 };
+  private motionBuffer: Array<{ dir: number; time: number }> = [];
+  private lastMotionDir = 5;
+  private motionClock = 0;
+  private idleClock = 0;
+  private immuneTintApplied = false;
   private readonly hasSpecial: boolean;
   private readonly onSpecialStart?: (fighter: Fighter) => void;
+  private readonly onSuperExecute?: (fighter: Fighter) => void;
+  private readonly onProjectile?: (fighter: Fighter, projectileName: string) => void;
+  private readonly onAttackVfx?: (
+    fighter: Fighter,
+    action: string,
+    abilitySlot: 0 | 1 | 2 | 3 | 4,
+    m1Step: 0 | 1 | 2 | 3 | 4
+  ) => void;
+  private readonly onMoveCallout?: (fighter: Fighter, moveName: string) => void;
 
   constructor(options: FighterOptions) {
     this.scene = options.scene;
     this.app = options.app;
     this.onSpecialStart = options.onSpecialStart;
+    this.onSuperExecute = options.onSuperExecute;
+    this.onProjectile = options.onProjectile;
+    this.onAttackVfx = options.onAttackVfx;
+    this.onMoveCallout = options.onMoveCallout;
     this.character = getCharacterDefinition(options.characterId);
+    this.kit = getHeroAbilityKit(this.character.id);
     this.facing = options.facing;
     this.minX = options.minX;
     this.maxX = options.maxX;
@@ -209,6 +290,16 @@ export class Fighter {
     return this.posX;
   }
 
+  /** The fighter's current vertical position (feet y) in world pixels. */
+  get y(): number {
+    return this.sprite.y;
+  }
+
+  /** Current display height in world pixels. */
+  get displayHeight(): number {
+    return this.sprite.displayHeight;
+  }
+
   /** The direction the fighter is facing (+1 right, -1 left). */
   get facingDirection(): 1 | -1 {
     return this.facing;
@@ -234,6 +325,91 @@ export class Fighter {
     return this.hasSpecial && this.meter >= METER_MAX;
   }
 
+  /** Whether the fighter is currently in unblocked hitstun (used for combo counters). */
+  get inHitstun(): boolean {
+    return this.hitstunTimer > 0 && !this.stunIsBlock && !this.defeated;
+  }
+
+  /** Whether the fighter is standing on the ground. */
+  get isGrounded(): boolean {
+    return this.grounded;
+  }
+
+  /** Whether the fighter is currently sliding low along the ground. */
+  get isSliding(): boolean {
+    return this.sliding;
+  }
+
+  /** Whether the fighter is currently immune while performing a main ability. */
+  get isImmune(): boolean {
+    return !this.defeated && this.locked && isAbilitySlotImmune(this.activeAbilitySlot);
+  }
+
+  /** Returns live ability slot states for the on-screen Abilities Bar HUD. */
+  getAbilityStates(): FighterAbilityState[] {
+    const inSlot1 = this.locked && this.activeAbilitySlot === 1;
+
+    return [
+      {
+        slot: 1,
+        name: this.kit.ability1.name,
+        notation: this.kit.ability1.notation,
+        cooldownRemaining: this.abilityCooldowns.cleave,
+        cooldownTotal: this.kit.ability1.cooldown,
+        ready: this.abilityCooldowns.cleave <= 0,
+        highlighted: false,
+        isSuper: false,
+        meterFrac: 1
+      },
+      {
+        slot: 2,
+        name: this.kit.ability2.name,
+        notation: this.kit.ability2.notation,
+        cooldownRemaining: inSlot1 ? 0 : this.abilityCooldowns.followup,
+        cooldownTotal: this.kit.ability2.cooldown,
+        ready: inSlot1 || this.abilityCooldowns.followup <= 0,
+        highlighted: inSlot1,
+        isSuper: false,
+        meterFrac: 1
+      },
+      {
+        slot: 3,
+        name: this.kit.ability3.name,
+        notation: this.kit.ability3.notation,
+        cooldownRemaining: this.abilityCooldowns.arrow,
+        cooldownTotal: this.kit.ability3.cooldown,
+        ready: this.abilityCooldowns.arrow <= 0,
+        highlighted: false,
+        isSuper: false,
+        meterFrac: 1
+      },
+      {
+        slot: 4,
+        name: this.kit.ability4.name,
+        notation: this.kit.ability4.notation,
+        cooldownRemaining: 0,
+        cooldownTotal: 0,
+        ready: this.isMeterReady,
+        highlighted: this.isMeterReady,
+        isSuper: true,
+        meterFrac: this.meter01
+      }
+    ];
+  }
+
+  /** Returns live M1 4-hit basic combo state for HUD display. */
+  getM1State(): FighterM1State {
+    const active = this.locked && this.activeAbilitySlot === 0 && this.m1ComboStep > 0;
+    const step = active ? this.m1ComboStep : 0;
+    const moveIndex = step > 0 ? step - 1 : 0;
+    return {
+      step,
+      moveName: this.kit.m1.moves[moveIndex] ?? this.kit.m1.moves[0],
+      airMove: this.kit.m1.airMove,
+      active
+    };
+  }
+
   /**
    * Adds charge to the special meter (clamped to full). Called by the match when
    * this fighter deals, blocks, or takes a hit.
@@ -244,7 +420,8 @@ export class Fighter {
       return;
     }
 
-    this.meter = Phaser.Math.Clamp(this.meter + amount, 0, METER_MAX);
+    const mult = this.character.id === BAYASAA_CHARACTER_ID ? 2.2 : 1;
+    this.meter = Phaser.Math.Clamp(this.meter + amount * mult, 0, METER_MAX);
   }
 
   /**
@@ -364,6 +541,49 @@ export class Fighter {
   }
 
   /**
+   * Returns this fighter's solid body pushbox in world coordinates.
+   * Grounded crouching/sliding fighters have a much shorter pushbox so they can
+   * slide underneath a jumping opponent, while jumping fighters clear a
+   * standing opponent once their feet rise above torso height.
+   */
+  getPushBox(): FighterPushBox {
+    const animation = this.currentAnimation();
+    const frame = animation ? this.resolvedFrame(animation) : null;
+    const rawWidth =
+      animation && frame?.collision ? this.frameRectToWorld(animation, frame.collision).width : 76;
+    const width = Phaser.Math.Clamp(rawWidth, 64, 96);
+    const isLow =
+      this.grounded &&
+      (this.sliding ||
+        this.currentAnimKey === this.actionKeys.crouch ||
+        this.currentAnimKey === this.actionKeys.blockLow ||
+        this.currentAnimKey === this.actionKeys.crouchMedium);
+    const height = isLow ? 64 : 118;
+
+    return {
+      x: this.posX,
+      width,
+      top: this.sprite.y - height,
+      bottom: this.sprite.y,
+      minX: this.minX,
+      maxX: this.maxX
+    };
+  }
+
+  /** Applies a pushbox-resolved horizontal position within current arena bounds. */
+  setResolvedX(x: number): void {
+    const clamped = Phaser.Math.Clamp(x, this.minX, this.maxX);
+    if (clamped === this.posX) {
+      return;
+    }
+
+    this.posX = clamped;
+    this.sprite.x = clamped;
+    this.shadow.x = clamped;
+    this.drawBoundsOverlay();
+  }
+
+  /**
    * The fighter's currently active attack (if any): present only while a strike
    * animation is on an attack-active frame and the swing hasn't connected yet.
    */
@@ -388,13 +608,33 @@ export class Fighter {
     }
 
     const frameIndex = this.currentFrameIndex(animation);
-    const finisher = kind === 'special' && !this.hasAttackFrameAfter(animation, frameIndex);
+    const isSuper = this.activeAbilitySlot === 4;
+    const isM1Strike = this.activeAbilitySlot === 0 && this.m1ComboStep > 0;
+    const isM1Finisher = isM1Strike && this.m1ComboStep === 4;
+    const isFinisherMove = isSuper || this.activeAbilitySlot === 2 || isM1Finisher;
+    const finisher = isFinisherMove && !this.hasAttackFrameAfter(animation, frameIndex);
+    const baseProfile = getAttackProfile(this.combat(), kind);
+    const m1DamageBonus = isM1Strike
+      ? this.m1ComboStep === 4
+        ? this.kit.m1.finisherDamageBonus
+        : this.kit.m1.stepDamageBonus[this.m1ComboStep - 1] ?? 0
+      : 0;
+    const profile = isM1Strike
+      ? {
+          ...baseProfile,
+          damage: baseProfile.damage + m1DamageBonus,
+          knockback: isM1Finisher
+            ? Math.round(baseProfile.knockback * this.kit.m1.finisherKnockbackMul)
+            : baseProfile.knockback
+        }
+      : baseProfile;
 
     return {
       rect: this.frameRectToWorld(animation, frame.attack),
-      profile: getAttackProfile(this.combat(), kind),
+      profile,
       signature: this.attackId,
-      finisher
+      finisher,
+      isSuper
     };
   }
 
@@ -459,7 +699,7 @@ export class Fighter {
    * @param blocked - Whether the defender guarded the attack.
    */
   applyHit(profile: AttackProfile, attackerFacing: 1 | -1, blocked: boolean): void {
-    if (this.defeated) {
+    if (this.defeated || this.isImmune) {
       return;
     }
 
@@ -472,12 +712,20 @@ export class Fighter {
       return;
     }
 
-    this.health = Math.max(0, this.health - profile.damage);
-    this.knockbackVel = attackerFacing * profile.knockback;
+    const isBayasaa = this.character.id === BAYASAA_CHARACTER_ID;
+    const damageTaken = isBayasaa ? Math.max(1, Math.round(profile.damage * 0.65)) : profile.damage;
+    const knockbackMul = isBayasaa ? 0.6 : 1;
+    const hitstunMul = isBayasaa ? 0.6 : 1;
+
+    this.health = Math.max(0, this.health - damageTaken);
+    this.knockbackVel = attackerFacing * profile.knockback * knockbackMul;
 
     if (this.health <= 0) {
       this.defeated = true;
       this.locked = true;
+      this.activeAbilitySlot = 0;
+      this.m1ComboStep = 0;
+      this.sliding = false;
       this.grounded = true;
       this.stunIsBlock = false;
       this.hitstunTimer = 0;
@@ -487,7 +735,10 @@ export class Fighter {
 
     this.stunIsBlock = false;
     this.locked = false;
-    this.hitstunTimer = profile.hitstun / 1000;
+    this.activeAbilitySlot = 0;
+    this.m1ComboStep = 0;
+    this.sliding = false;
+    this.hitstunTimer = (profile.hitstun * hitstunMul) / 1000;
     this.currentAnimKey = '';
     this.playState(this.actionKeys.hitHigh, false);
   }
@@ -506,19 +757,33 @@ export class Fighter {
     this.velocityY = 0;
     this.grounded = true;
     this.locked = false;
+    this.activeAbilitySlot = 0;
+    this.m1ComboStep = 0;
+    this.sliding = false;
+    this.slideDustTimer = 0;
     this.defeated = false;
     this.frozen = true;
     this.hitstunTimer = 0;
     this.stunIsBlock = false;
     this.stunBlockLow = false;
     this.knockbackVel = 0;
+    this.attackLungeVel = 0;
+    this.attackElapsed = 0;
     this.attackConnected = true;
     this.attackActiveLast = false;
+    this.projectileFiredForSwing = false;
+    this.abilityCooldowns = { cleave: 0, followup: 0, arrow: 0 };
+    this.motionBuffer = [];
+    this.lastMotionDir = 5;
     this.meter = 0;
     this.currentAnimKey = '';
     this.currentReverse = false;
+    this.idleClock = 0;
+    this.immuneTintApplied = false;
 
+    this.sprite.clearTint();
     this.sprite.setPosition(this.posX, this.groundY).setFlipX(this.facing === 1);
+    this.sprite.setScale(this.appliedScale || this.stats().scale);
     this.playState(this.actionKeys.idle, true);
     this.updateShadow();
   }
@@ -530,6 +795,9 @@ export class Fighter {
    */
   update(seconds: number, input: FighterInput): void {
     if (this.defeated) {
+      this.sliding = false;
+      this.updateIdleAnimation(seconds, false);
+      this.updateImmunityVisual();
       this.playState(this.actionKeys.knockdown, false);
       this.applyKnockback(seconds);
       this.updateShadow();
@@ -538,12 +806,22 @@ export class Fighter {
     }
 
     if (this.frozen) {
+      this.sliding = false;
+      this.updateImmunityVisual();
       this.playState(this.actionKeys.idle, true);
+      this.updateIdleAnimation(seconds, true);
       this.drawBoundsOverlay();
       return;
     }
 
+    this.abilityCooldowns.cleave = Math.max(0, this.abilityCooldowns.cleave - seconds);
+    this.abilityCooldowns.followup = Math.max(0, this.abilityCooldowns.followup - seconds);
+    this.abilityCooldowns.arrow = Math.max(0, this.abilityCooldowns.arrow - seconds);
+
     if (this.hitstunTimer > 0) {
+      this.sliding = false;
+      this.updateIdleAnimation(seconds, false);
+      this.updateImmunityVisual();
       this.hitstunTimer = Math.max(0, this.hitstunTimer - seconds);
       this.applyKnockback(seconds);
       this.playState(
@@ -564,12 +842,28 @@ export class Fighter {
       return;
     }
 
+    if (this.character.id === BAYASAA_CHARACTER_ID) {
+      this.regenHealth(3.5 * seconds);
+    }
+
+    this.recordMotion(seconds, input);
+
     if (!this.grounded) {
+      this.sliding = false;
       this.updateAirborne(seconds, input);
-    } else if (!this.locked) {
+    } else if (this.locked) {
+      this.sliding = false;
+      this.attackElapsed += seconds;
+      this.applyAttackLunge(seconds);
+      this.checkArrowProjectileSpawn();
+      this.tryCancelCombo(input);
+    } else {
       this.updateGrounded(seconds, input);
     }
 
+    const isIdle = this.grounded && !this.locked && !this.sliding && this.currentAnimKey === this.actionKeys.idle;
+    this.updateIdleAnimation(seconds, isIdle);
+    this.updateImmunityVisual();
     this.updateAttackWindow();
     this.drawBoundsOverlay();
   }
@@ -589,6 +883,10 @@ export class Fighter {
   private resolveActionKeys(): FighterActionKeys {
     const key = (action: string): string =>
       findCharacterAnimationKeyByAction(this.character.id, action) ?? this.character.animations[0].key;
+    const heavyKey =
+      findCharacterAnimationKeyByAction(this.character.id, 'heavy-kick') ??
+      findCharacterAnimationKeyByAction(this.character.id, 'heavy-punch') ??
+      key('light-punch');
 
     return {
       idle: key('idle'),
@@ -600,12 +898,18 @@ export class Fighter {
       blockLow: findCharacterAnimationKeyByAction(this.character.id, 'block-low') ?? key('block-high'),
       hitHigh: key('hit-high'),
       lightPunch: key('light-punch'),
-      heavy:
-        findCharacterAnimationKeyByAction(this.character.id, 'heavy-kick') ??
-        findCharacterAnimationKeyByAction(this.character.id, 'heavy-punch') ??
+      lightKick: findCharacterAnimationKeyByAction(this.character.id, 'light-kick'),
+      crouchMedium: findCharacterAnimationKeyByAction(this.character.id, 'crouch-medium-punch'),
+      heavy: heavyKey,
+      jumpHeavy: findCharacterAnimationKeyByAction(this.character.id, 'jump-heavy-punch'),
+      specialCleave: findCharacterAnimationKeyByAction(this.character.id, 'special-cleave') ?? heavyKey,
+      specialFollowup: findCharacterAnimationKeyByAction(this.character.id, 'special-followup') ?? heavyKey,
+      specialArrow:
+        findCharacterAnimationKeyByAction(this.character.id, 'special-arrow') ??
+        findCharacterAnimationKeyByAction(this.character.id, 'special-charge') ??
         key('light-punch'),
       specialCharge: findCharacterAnimationKeyByAction(this.character.id, 'special-charge') ?? key('crouch'),
-      special: findCharacterAnimationKeyByAction(this.character.id, 'special') ?? key('heavy-kick'),
+      special: findCharacterAnimationKeyByAction(this.character.id, 'special') ?? heavyKey,
       knockdown: key('knockdown')
     };
   }
@@ -628,14 +932,24 @@ export class Fighter {
     if (!this.locked) {
       return null;
     }
-    if (this.currentAnimKey === this.actionKeys.lightPunch) {
-      return 'high';
+    if (this.activeAbilitySlot === 1 || this.activeAbilitySlot === 2 || this.activeAbilitySlot === 4) {
+      return 'special';
     }
-    if (this.currentAnimKey === this.actionKeys.heavy) {
+    if (this.activeAbilitySlot === 3) {
+      return null;
+    }
+    if (this.m1ComboStep === 3 || this.m1ComboStep === 4) {
       return 'low';
     }
-    if (this.currentAnimKey === this.actionKeys.special) {
-      return 'special';
+    if (
+      this.currentAnimKey === this.actionKeys.lightPunch ||
+      this.currentAnimKey === this.actionKeys.lightKick ||
+      this.currentAnimKey === this.actionKeys.crouchMedium
+    ) {
+      return 'high';
+    }
+    if (this.currentAnimKey === this.actionKeys.heavy || this.currentAnimKey === this.actionKeys.jumpHeavy) {
+      return 'low';
     }
 
     return null;
@@ -717,6 +1031,11 @@ export class Fighter {
    * @param input - The intent snapshot for this frame.
    */
   private updateAirborne(seconds: number, input: FighterInput): void {
+    const airStrikeKey = this.actionKeys.jumpHeavy ?? this.actionKeys.heavy ?? this.actionKeys.lightPunch;
+    if (!this.locked && (input.m1 || input.heavy || input.light)) {
+      this.startAirAttack(airStrikeKey, Boolean(input.m1 || input.light));
+    }
+
     const stats = this.stats();
     this.velocityY += stats.gravity * seconds;
     let nextY = this.sprite.y + this.velocityY * seconds;
@@ -731,6 +1050,9 @@ export class Fighter {
       nextY = this.groundY;
       this.velocityY = 0;
       this.grounded = true;
+      this.locked = false;
+      this.m1ComboStep = 0;
+      this.attackConnected = true;
       this.currentAnimKey = '';
       this.currentReverse = false;
     }
@@ -746,38 +1068,105 @@ export class Fighter {
    * @param input - The intent snapshot for this frame.
    */
   private updateGrounded(seconds: number, input: FighterInput): void {
+    const dir = this.horizontalDirection(input);
+    const holdingForward = dir === this.facing;
+    const holdingBack = dir === -this.facing;
+    const anyAttack = input.light || input.heavy || input.special || Boolean(input.m1);
+
+    // Super Art: 236236+Attack, ability4, or Special button with full meter (unless explicitly throwing 214P).
+    if (
+      this.isMeterReady &&
+      (input.ability4 ||
+        (input.special && !holdingBack && !this.hasMotion('214', 420)) ||
+        (this.hasMotion('236236', 680) && (input.heavy || input.special)))
+    ) {
+      this.startSpecial();
+      return;
+    }
+
+    // Special Move: Ranged Projectile (214P, Back+Special, or ability3).
+    if (
+      this.abilityCooldowns.arrow <= 0 &&
+      (input.ability3 || (this.hasMotion('214', 420) && anyAttack) || (holdingBack && input.special))
+    ) {
+      this.startArrowLaunch();
+      return;
+    }
+
+    // Special Move: Ability 2 standalone.
+    if (this.abilityCooldowns.followup <= 0 && input.ability2) {
+      this.startFollowupSlash(false);
+      return;
+    }
+
+    // Special Move: Ability 1 (236S, ability1, or Special when meter isn't ready).
+    if (
+      this.abilityCooldowns.cleave <= 0 &&
+      (input.ability1 || (this.hasMotion('236', 420) && anyAttack) || (input.special && !this.isMeterReady))
+    ) {
+      this.startCleave();
+      return;
+    }
+
     if (input.special && this.isMeterReady) {
+      this.sliding = false;
       this.startSpecial();
       return;
     }
     if (input.jump) {
+      this.sliding = false;
       this.startJump();
       return;
     }
-    if (input.light) {
-      this.startOneShot(this.actionKeys.lightPunch);
+    if (input.crouch && this.actionKeys.crouchMedium && (input.light || input.heavy || input.m1)) {
+      this.startOneShot(this.actionKeys.crouchMedium, 40, 'CROUCH STRIKE', 0, input.m1 ? 1 : 0);
+      return;
+    }
+    if (input.m1 || input.light) {
+      this.startM1Step(1);
       return;
     }
     if (input.heavy) {
-      this.startOneShot(this.actionKeys.heavy);
+      this.startOneShot(this.actionKeys.heavy, holdingForward ? 210 : 60);
       return;
     }
     if (input.block) {
+      this.sliding = false;
       this.playState(input.crouch ? this.actionKeys.blockLow : this.actionKeys.blockHigh, false);
       return;
     }
+    if (input.crouch && dir !== 0) {
+      const stats = this.stats();
+      const slideSpeed = stats.walkSpeed * 1.58;
+      if (!this.sliding) {
+        this.slideDustTimer = 0;
+      }
+      this.sliding = true;
+      this.posX = Phaser.Math.Clamp(this.posX + dir * slideSpeed * seconds, this.minX, this.maxX);
+      this.sprite.x = this.posX;
+      this.updateShadow();
+      this.playState(this.actionKeys.crouch, false);
+      this.slideDustTimer -= seconds;
+      if (this.slideDustTimer <= 0) {
+        this.slideDustTimer = 0.065;
+        spawnSlideDust(this.scene, this.posX, this.groundY, dir, this.kit.themeColor);
+      }
+      return;
+    }
+
+    this.sliding = false;
+
     if (input.crouch) {
       this.playState(this.actionKeys.crouch, false);
       return;
     }
 
-    const direction = this.horizontalDirection(input);
-    if (direction !== 0) {
+    if (dir !== 0) {
       const stats = this.stats();
-      this.posX = Phaser.Math.Clamp(this.posX + direction * stats.walkSpeed * seconds, this.minX, this.maxX);
+      this.posX = Phaser.Math.Clamp(this.posX + dir * stats.walkSpeed * seconds, this.minX, this.maxX);
       this.sprite.x = this.posX;
       this.updateShadow();
-      this.playWalk(direction === this.facing);
+      this.playWalk(dir === this.facing);
       return;
     }
 
@@ -843,21 +1232,278 @@ export class Fighter {
    * to idle.
    * @param animKey - The action animation key to play.
    */
-  private startOneShot(animKey: string): void {
+  private startOneShot(
+    animKey: string,
+    forwardLunge = 0,
+    callout?: string,
+    abilitySlot: 0 | 1 | 2 | 3 = 0,
+    m1Step: 0 | 1 | 2 | 3 | 4 = 0
+  ): void {
     this.locked = true;
+    this.activeAbilitySlot = abilitySlot;
+    this.m1ComboStep = m1Step;
     this.currentAnimKey = animKey;
     this.currentReverse = false;
     this.attackId += 1;
+    const swingId = this.attackId;
+    this.attackElapsed = 0;
+    this.attackLungeVel = forwardLunge * this.facing;
     this.attackConnected = false;
+    this.attackActiveLast = false;
+    this.projectileFiredForSwing = false;
+
+    if (callout) {
+      this.onMoveCallout?.(this, callout);
+    }
+
     this.sprite.play({ key: animKey, repeat: 0 }, true);
     this.sprite.once(`animationcomplete-${animKey}`, () => {
+      if (this.attackId !== swingId) {
+        return;
+      }
+
       this.locked = false;
+      this.activeAbilitySlot = 0;
+      this.m1ComboStep = 0;
+      this.attackLungeVel = 0;
       this.currentAnimKey = '';
 
       if (this.grounded) {
         this.playState(this.actionKeys.idle, true);
       }
     });
+  }
+
+  private startM1Step(step: 1 | 2 | 3 | 4): void {
+    const m1 = this.kit.m1;
+    const lunge = m1.lunge[step - 1] ?? 75;
+    let animKey = this.actionKeys.lightPunch;
+    if (step === 2) {
+      animKey = this.actionKeys.lightKick ?? this.actionKeys.heavy;
+    } else if (step === 3) {
+      animKey = this.actionKeys.crouchMedium ?? this.actionKeys.lightPunch;
+    } else if (step === 4) {
+      animKey = this.actionKeys.heavy;
+    }
+
+    const callout = step === 4 ? m1.moves[3] : undefined;
+    this.startOneShot(animKey, lunge, callout, 0, step);
+  }
+
+  private startAirAttack(animKey: string, isM1 = false): void {
+    this.locked = true;
+    this.activeAbilitySlot = 0;
+    this.m1ComboStep = isM1 ? 1 : 0;
+    this.currentAnimKey = animKey;
+    this.currentReverse = false;
+    this.attackId += 1;
+    const swingId = this.attackId;
+    this.attackElapsed = 0;
+    this.attackLungeVel = 0;
+    this.attackConnected = false;
+    this.attackActiveLast = false;
+
+    if (isM1) {
+      this.onMoveCallout?.(this, this.kit.m1.airMove);
+    }
+
+    this.sprite.play({ key: animKey, repeat: 0 }, true);
+    this.sprite.once(`animationcomplete-${animKey}`, () => {
+      if (this.attackId !== swingId || this.grounded) {
+        return;
+      }
+      this.locked = false;
+      this.m1ComboStep = 0;
+      this.playState(this.actionKeys.jump, false);
+    });
+  }
+
+  private startCleave(): void {
+    this.abilityCooldowns.cleave = this.kit.ability1.cooldown;
+    this.startOneShot(this.actionKeys.specialCleave, this.kit.ability1.lunge, this.kit.ability1.callout, 1);
+  }
+
+  private startFollowupSlash(isChain: boolean): void {
+    this.abilityCooldowns.followup = this.kit.ability2.cooldown;
+    this.startOneShot(
+      this.actionKeys.specialFollowup,
+      isChain ? this.kit.ability2.lunge : Math.round(this.kit.ability2.lunge * 0.8),
+      isChain ? this.kit.ability2.chainCallout : this.kit.ability2.callout,
+      2
+    );
+  }
+
+  private startArrowLaunch(): void {
+    this.abilityCooldowns.arrow = this.kit.ability3.cooldown;
+    this.startOneShot(this.actionKeys.specialArrow, 0, this.kit.ability3.callout, 3);
+  }
+
+  private checkArrowProjectileSpawn(): void {
+    if (this.activeAbilitySlot !== 3 || this.projectileFiredForSwing) {
+      return;
+    }
+
+    const anim = this.currentAnimation();
+    if (!anim) {
+      return;
+    }
+
+    const triggerFrame = Math.min(2, Math.max(0, anim.sheet.frames - 1));
+    if (this.currentFrameIndex(anim) >= triggerFrame) {
+      this.projectileFiredForSwing = true;
+      this.onProjectile?.(this, this.kit.ability3.projectile.name);
+    }
+  }
+
+  private applyAttackLunge(seconds: number): void {
+    if (this.attackLungeVel === 0) {
+      return;
+    }
+
+    this.posX = Phaser.Math.Clamp(this.posX + this.attackLungeVel * seconds, this.minX, this.maxX);
+    this.sprite.x = this.posX;
+    this.updateShadow();
+    const decay = 780 * seconds;
+    this.attackLungeVel =
+      this.attackLungeVel > 0
+        ? Math.max(0, this.attackLungeVel - decay)
+        : Math.min(0, this.attackLungeVel + decay);
+  }
+
+  /**
+   * Handles combo cancel chains while a fighter is mid-attack:
+   * - Light Punch -> Light Kick -> Forward + Heavy Punch
+   * - Crouch Medium -> Standing Heavy -> Ability 1 (236S) -> Ability 2 Follow-up (236P)
+   * - Close Heavy -> Ability 3 Projectile (214P) -> Super Art (236236K)
+   */
+  private tryCancelCombo(input: FighterInput): void {
+    if (this.attackElapsed < 0.085) {
+      return;
+    }
+
+    const dir = this.horizontalDirection(input);
+    const holdingForward = dir === this.facing;
+    const holdingBack = dir === -this.facing;
+    const anyAttack = input.light || input.heavy || input.special;
+
+    // Never cancel out of the meter Super Art itself.
+    if (this.activeAbilitySlot === 4) {
+      return;
+    }
+
+    // Super Art cancel (e.g. from Ability 3 Projectile or Heavy Punch).
+    if (
+      this.isMeterReady &&
+      (input.ability4 ||
+        (input.special && !holdingBack && !this.hasMotion('214', 420)) ||
+        (this.hasMotion('236236', 680) && (input.heavy || input.special)))
+    ) {
+      if (this.activeAbilitySlot === 3 && !this.projectileFiredForSwing) {
+        this.projectileFiredForSwing = true;
+        this.onProjectile?.(this, this.kit.ability3.projectile.name);
+      }
+      this.startSpecial();
+      return;
+    }
+
+    // Ability 2 chain immediately after Ability 1.
+    if (this.activeAbilitySlot === 1 && (input.ability2 || input.light || input.heavy || input.special)) {
+      this.startFollowupSlash(true);
+      return;
+    }
+
+    // Ability 3 (214P) cancel from normals/abilities.
+    if (
+      this.abilityCooldowns.arrow <= 0 &&
+      this.activeAbilitySlot !== 3 &&
+      (input.ability3 || (this.hasMotion('214', 420) && anyAttack) || (holdingBack && input.special))
+    ) {
+      this.startArrowLaunch();
+      return;
+    }
+
+    // Standalone Ability 2 cancel from normals via ability2.
+    if (this.abilityCooldowns.followup <= 0 && this.activeAbilitySlot !== 2 && input.ability2) {
+      this.startFollowupSlash(false);
+      return;
+    }
+
+    // Ability 1 (236S) cancel from normals.
+    if (
+      this.abilityCooldowns.cleave <= 0 &&
+      this.activeAbilitySlot !== 1 &&
+      this.activeAbilitySlot !== 2 &&
+      (input.ability1 || (this.hasMotion('236', 420) && anyAttack) || (input.special && !this.isMeterReady))
+    ) {
+      this.startCleave();
+      return;
+    }
+
+    // M1 4-hit auto-combo chain: M1-1 -> M1-2 -> M1-3 -> M1-4 Finisher!
+    if (this.activeAbilitySlot === 0 && this.m1ComboStep > 0 && this.m1ComboStep < 4 && (input.m1 || input.light)) {
+      const nextStep = (this.m1ComboStep + 1) as 2 | 3 | 4;
+      this.startM1Step(nextStep);
+      return;
+    }
+
+    // Basic String fallback: Light / M1 -> Heavy Punch.
+    if (
+      this.activeAbilitySlot === 0 &&
+      (this.currentAnimKey === this.actionKeys.lightPunch || this.currentAnimKey === this.actionKeys.lightKick) &&
+      input.heavy
+    ) {
+      this.startOneShot(this.actionKeys.heavy, holdingForward ? 240 : 100);
+      return;
+    }
+
+    // Crouch Medium Punch -> Standing Heavy Punch.
+    if (
+      this.activeAbilitySlot === 0 &&
+      this.actionKeys.crouchMedium &&
+      this.currentAnimKey === this.actionKeys.crouchMedium &&
+      input.heavy
+    ) {
+      this.startOneShot(this.actionKeys.heavy, holdingForward ? 200 : 80);
+    }
+  }
+
+  private recordMotion(seconds: number, input: FighterInput): void {
+    this.motionClock += seconds * 1000;
+    const h = this.horizontalDirection(input) * this.facing;
+    let dir = 5;
+    if (input.crouch) {
+      dir = h > 0 ? 3 : h < 0 ? 1 : 2;
+    } else {
+      dir = h > 0 ? 6 : h < 0 ? 4 : 5;
+    }
+
+    if (dir !== this.lastMotionDir) {
+      this.lastMotionDir = dir;
+      this.motionBuffer.push({ dir, time: this.motionClock });
+      if (this.motionBuffer.length > 24) {
+        this.motionBuffer.shift();
+      }
+    }
+  }
+
+  private hasMotion(pattern: '236' | '214' | '236236', windowMs: number): boolean {
+    const cutoff = this.motionClock - windowMs;
+    const recent = this.motionBuffer.filter((entry) => entry.time >= cutoff).map((entry) => entry.dir);
+    if (recent.length === 0) {
+      return false;
+    }
+
+    if (pattern === '236') {
+      return matchSequence(recent, [2, 3, 6]) || matchSequence(recent, [2, 6]);
+    }
+    if (pattern === '214') {
+      return matchSequence(recent, [2, 1, 4]) || matchSequence(recent, [2, 4]);
+    }
+
+    return (
+      matchSequence(recent, [2, 3, 6, 2, 3, 6]) ||
+      matchSequence(recent, [2, 6, 2, 6])
+    );
   }
 
   /**
@@ -868,8 +1514,14 @@ export class Fighter {
    */
   private startSpecial(): void {
     this.locked = true;
+    this.activeAbilitySlot = 4;
+    this.m1ComboStep = 0;
     this.meter = 0;
     this.currentReverse = false;
+    this.attackId += 1;
+    const swingId = this.attackId;
+    this.attackElapsed = 0;
+    this.attackLungeVel = 0;
     this.attackConnected = true;
     this.attackActiveLast = false;
 
@@ -879,14 +1531,14 @@ export class Fighter {
     this.currentAnimKey = this.actionKeys.specialCharge;
     this.sprite.play({ key: this.actionKeys.specialCharge, repeat: 0 }, true);
     this.sprite.once(`animationcomplete-${this.actionKeys.specialCharge}`, () => {
-      if (this.defeated) {
+      if (this.defeated || this.attackId !== swingId) {
         return;
       }
 
       // Super freeze: hold the charged pose so the cut-in cinematic peaks before
       // the move launches.
       this.scene.time.delayedCall(SUPER_FREEZE_MS, () => {
-        if (!this.defeated) {
+        if (!this.defeated && this.attackId === swingId) {
           this.executeSpecial();
         }
       });
@@ -899,13 +1551,24 @@ export class Fighter {
    * window so the move lands a combo.
    */
   private executeSpecial(): void {
+    this.activeAbilitySlot = 4;
+    this.m1ComboStep = 0;
     this.currentAnimKey = this.actionKeys.special;
     this.attackId += 1;
+    const swingId = this.attackId;
     this.attackConnected = false;
     this.attackActiveLast = false;
+    this.onSuperExecute?.(this);
+
     this.sprite.play({ key: this.actionKeys.special, repeat: 0 }, true);
     this.sprite.once(`animationcomplete-${this.actionKeys.special}`, () => {
+      if (this.attackId !== swingId) {
+        return;
+      }
+
       this.locked = false;
+      this.activeAbilitySlot = 0;
+      this.m1ComboStep = 0;
       this.currentAnimKey = '';
 
       if (this.grounded) {
@@ -924,6 +1587,7 @@ export class Fighter {
 
     if (active && !this.attackActiveLast) {
       this.attackConnected = false;
+      this.onAttackVfx?.(this, this.currentAnimKey, this.activeAbilitySlot, this.m1ComboStep);
     }
 
     this.attackActiveLast = active;
@@ -1087,6 +1751,41 @@ export class Fighter {
     return 0;
   }
 
+  /** Applies a smooth feet-anchored idle stance breathing motion while standing neutral. */
+  private updateIdleAnimation(seconds: number, isIdle: boolean): void {
+    const baseScale = this.appliedScale || this.stats().scale;
+    if (isIdle) {
+      this.idleClock += seconds;
+      const breathe = Math.sin(this.idleClock * 4.4);
+      this.sprite.setScale(baseScale * (1 + breathe * 0.025), baseScale * (1 - breathe * 0.032));
+      this.shadow.setScale(1 + breathe * 0.04);
+      return;
+    }
+
+    if (this.idleClock !== 0 || this.sprite.scaleX !== baseScale || this.sprite.scaleY !== baseScale) {
+      this.idleClock = 0;
+      this.sprite.setScale(baseScale);
+      if (this.grounded && !this.defeated) {
+        this.updateShadow();
+      }
+    }
+  }
+
+  /** Applies an invulnerability glow tint on the sprite while main-ability immunity is active. */
+  private updateImmunityVisual(): void {
+    if (this.isImmune) {
+      const pulse = Math.floor(this.scene.time.now / 70) % 2 === 0;
+      this.sprite.setTint(pulse ? 0xbef264 : 0x7dd3fc);
+      this.immuneTintApplied = true;
+      return;
+    }
+
+    if (this.immuneTintApplied) {
+      this.immuneTintApplied = false;
+      this.sprite.clearTint();
+    }
+  }
+
   /** Keeps the ground shadow under the fighter and shrinks it as they rise. */
   private updateShadow(): void {
     const airborneLift = Phaser.Math.Clamp((this.groundY - this.sprite.y) / 220, 0, 1);
@@ -1095,4 +1794,19 @@ export class Fighter {
     this.shadow.setScale(1 - airborneLift * 0.45);
     this.shadow.setAlpha(0.32 - airborneLift * 0.18);
   }
+}
+
+function matchSequence(history: number[], target: number[]): boolean {
+  let cursor = 0;
+
+  for (const dir of history) {
+    if (dir === target[cursor]) {
+      cursor += 1;
+      if (cursor >= target.length) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }

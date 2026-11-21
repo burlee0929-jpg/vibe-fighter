@@ -28,6 +28,8 @@ export interface RawSheetOptions {
   flip?: boolean;
   /** Force this many equal-width poses instead of auto-detecting them. */
   frames?: number;
+  /** Optional fraction of image height to trim from the bottom before slicing (e.g. 0.33). */
+  cropBottomFraction?: number;
 }
 
 interface Pose {
@@ -74,7 +76,10 @@ function loadImage(url: string): Promise<HTMLImageElement | null> {
 export function sliceRawSheet(image: HTMLImageElement, options: RawSheetOptions = {}): RawSheet | null {
   const shrink = Math.min(1, MAX_SOURCE_SIDE / Math.max(image.naturalWidth, image.naturalHeight));
   const width = Math.max(1, Math.round(image.naturalWidth * shrink));
-  const height = Math.max(1, Math.round(image.naturalHeight * shrink));
+  const fullHeight = Math.max(1, Math.round(image.naturalHeight * shrink));
+  const cropBottom = Math.max(0, Math.min(0.6, options.cropBottomFraction ?? 0));
+  const height = Math.max(1, Math.round(fullHeight * (1 - cropBottom)));
+  const srcHeight = Math.max(1, Math.round(image.naturalHeight * (1 - cropBottom)));
   const source = makeCanvas(width, height);
   const sourceContext = source.getContext('2d', { willReadFrequently: true });
 
@@ -82,7 +87,7 @@ export function sliceRawSheet(image: HTMLImageElement, options: RawSheetOptions 
     return null;
   }
 
-  sourceContext.drawImage(image, 0, 0, width, height);
+  sourceContext.drawImage(image, 0, 0, image.naturalWidth, srcHeight, 0, 0, width, height);
 
   const pixels = sourceContext.getImageData(0, 0, width, height);
 
@@ -177,6 +182,32 @@ export function reverseRawSheet(sheet: RawSheet): RawSheet {
   }
 
   return { canvas, frames: sheet.frames, boxes: [...sheet.boxes].reverse() };
+}
+
+/**
+ * Assemble a new spritesheet by picking specific frames from one or more sliced
+ * pose sheets (used when multi-move sheets are authored on a shared canvas).
+ * @param entries - Ordered list of `{ sheet, frame }` picks (up to MAX_FRAMES).
+ */
+export function composeRawSheetFrames(entries: Array<{ sheet: RawSheet; frame: number }>): RawSheet {
+  const picks = entries.slice(0, MAX_FRAMES);
+  const rows = Math.max(1, Math.ceil(picks.length / RAW_COLS));
+  const canvas = makeCanvas(RAW_COLS * RAW_CELL, rows * RAW_CELL);
+  const context = canvas.getContext('2d');
+  const boxes: Rect[] = [];
+
+  picks.forEach((entry, index) => {
+    const safeFrame = Math.max(0, Math.min(entry.sheet.frames - 1, entry.frame));
+    const sx = (safeFrame % RAW_COLS) * RAW_CELL;
+    const sy = Math.floor(safeFrame / RAW_COLS) * RAW_CELL;
+    const dx = (index % RAW_COLS) * RAW_CELL;
+    const dy = Math.floor(index / RAW_COLS) * RAW_CELL;
+
+    context?.drawImage(entry.sheet.canvas, sx, sy, RAW_CELL, RAW_CELL, dx, dy, RAW_CELL, RAW_CELL);
+    boxes.push({ ...entry.sheet.boxes[safeFrame] });
+  });
+
+  return { canvas, frames: picks.length, boxes };
 }
 
 /**

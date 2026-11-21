@@ -3,6 +3,7 @@ import { RED_BRAWLER_CHARACTER_ID } from './redBrawler';
 import { GREEN_BOXER_CHARACTER_ID } from './greenBoxer';
 import { JIUJITSU_FIGHTER_CHARACTER_ID } from './jiujitsuFighter';
 import { BAYASAA_CHARACTER_ID } from './bayasaa';
+import { SUKUNA_CHARACTER_ID } from './sukuna';
 import type {
   AttackKind,
   AttackProfile,
@@ -22,7 +23,7 @@ export const FIGHTER_PLAYGROUND_CONFIG_SAVE_TARGET = 'configs/fighter-playground
 export const DEFAULT_FIGHTER_STATS: FighterStats = {
   walkSpeed: 230,
   airDrift: 190,
-  jump: 980,
+  jump: 1050,
   gravity: 2300,
   scale: 1.4
 };
@@ -33,9 +34,18 @@ export const DEFAULT_FIGHTER_STATS: FighterStats = {
  */
 const FIGHTER_STAT_OVERRIDES: Record<string, Partial<FighterStats>> = {
   [RED_BRAWLER_CHARACTER_ID]: {},
-  [GREEN_BOXER_CHARACTER_ID]: { walkSpeed: 250, jump: 1000 },
-  [JIUJITSU_FIGHTER_CHARACTER_ID]: { walkSpeed: 240, airDrift: 210, jump: 1040 },
-  [BAYASAA_CHARACTER_ID]: { walkSpeed: 255, airDrift: 200, jump: 1020 }
+  [GREEN_BOXER_CHARACTER_ID]: { walkSpeed: 250, jump: 1060 },
+  [JIUJITSU_FIGHTER_CHARACTER_ID]: { walkSpeed: 240, airDrift: 210, jump: 1075 },
+  [BAYASAA_CHARACTER_ID]: { walkSpeed: 410, airDrift: 340, jump: 1220, scale: 1.52 },
+  [SUKUNA_CHARACTER_ID]: { walkSpeed: 265, airDrift: 215, jump: 1065, scale: 1.45 },
+  gojo: { walkSpeed: 270, airDrift: 220, jump: 1075, scale: 1.45 },
+  naruto: { walkSpeed: 280, airDrift: 235, jump: 1085, scale: 1.42 },
+  'cyber-ronin': { walkSpeed: 285, airDrift: 225, jump: 1065, scale: 1.44 },
+  goku: { walkSpeed: 275, airDrift: 230, jump: 1080, scale: 1.45 },
+  'frost-queen': { walkSpeed: 255, airDrift: 220, jump: 1060, scale: 1.44 },
+  'vessel-yuji': { walkSpeed: 285, airDrift: 235, jump: 1090, scale: 1.45 },
+  'restless-gambler': { walkSpeed: 265, airDrift: 215, jump: 1065, scale: 1.46 },
+  'hero-hunter': { walkSpeed: 290, airDrift: 240, jump: 1085, scale: 1.45 }
 };
 
 /**
@@ -93,16 +103,124 @@ const FIGHTER_COMBAT_OVERRIDES: Record<string, Partial<FighterCombat>> = {
     specialHitstun: 220
   },
   [BAYASAA_CHARACTER_ID]: {
+    maxHealth: 220,
+    highDamage: 18,
+    highKnockback: 230,
+    highHitstun: 480,
+    lowDamage: 28,
+    lowKnockback: 450,
+    lowHitstun: 680,
+    specialDamage: 18,
+    specialKnockback: 260,
+    specialHitstun: 420
+  },
+  [SUKUNA_CHARACTER_ID]: {
+    maxHealth: 115,
+    highDamage: 7,
+    highKnockback: 165,
+    highHitstun: 320,
+    lowDamage: 14,
+    lowKnockback: 310,
+    lowHitstun: 480,
+    specialDamage: 7,
+    specialKnockback: 160,
+    specialHitstun: 260
+  },
+  gojo: {
+    maxHealth: 115,
+    highDamage: 7,
+    highKnockback: 170,
+    highHitstun: 310,
+    lowDamage: 14,
+    lowKnockback: 320,
+    lowHitstun: 460,
+    specialDamage: 7,
+    specialKnockback: 165,
+    specialHitstun: 260
+  },
+  naruto: {
+    maxHealth: 115,
+    highDamage: 7,
+    highKnockback: 165,
+    highHitstun: 300,
+    lowDamage: 13,
+    lowKnockback: 300,
+    lowHitstun: 450,
+    specialDamage: 7,
+    specialKnockback: 155,
+    specialHitstun: 260
+  },
+  'cyber-ronin': {
     maxHealth: 110,
     highDamage: 8,
-    highKnockback: 200,
-    highHitstun: 290,
-    lowDamage: 15,
-    lowKnockback: 360,
-    lowHitstun: 460,
-    specialDamage: 8,
-    specialKnockback: 200,
+    highKnockback: 160,
+    highHitstun: 310,
+    lowDamage: 14,
+    lowKnockback: 310,
+    lowHitstun: 470,
+    specialDamage: 7,
+    specialKnockback: 160,
+    specialHitstun: 250
+  },
+  goku: {
+    maxHealth: 120,
+    highDamage: 7,
+    highKnockback: 170,
+    highHitstun: 300,
+    lowDamage: 14,
+    lowKnockback: 320,
+    lowHitstun: 470,
+    specialDamage: 7,
+    specialKnockback: 170,
     specialHitstun: 260
+  },
+  'frost-queen': {
+    maxHealth: 110,
+    highDamage: 6,
+    highKnockback: 160,
+    highHitstun: 330,
+    lowDamage: 13,
+    lowKnockback: 300,
+    lowHitstun: 500,
+    specialDamage: 7,
+    specialKnockback: 155,
+    specialHitstun: 270
+  },
+  'vessel-yuji': {
+    maxHealth: 115,
+    highDamage: 7,
+    highKnockback: 170,
+    highHitstun: 310,
+    lowDamage: 14,
+    lowKnockback: 330,
+    lowHitstun: 470,
+    specialDamage: 7,
+    specialKnockback: 165,
+    specialHitstun: 260
+  },
+  'restless-gambler': {
+    maxHealth: 125,
+    highDamage: 7,
+    highKnockback: 175,
+    highHitstun: 305,
+    lowDamage: 14,
+    lowKnockback: 325,
+    lowHitstun: 465,
+    specialDamage: 7,
+    specialKnockback: 160,
+    specialHitstun: 255
+  },
+  'hero-hunter': {
+    maxHealth: 110,
+    highDamage: 7,
+    highKnockback: 165,
+    highHitstun: 315,
+    lowDamage: 14,
+    lowKnockback: 315,
+    lowHitstun: 475,
+    specialDamage: 7,
+    specialKnockback: 165,
+    specialHitstun: 265
   }
 };
 
