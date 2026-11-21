@@ -253,7 +253,9 @@ export async function prepareSukunaCharacter(scene: Phaser.Scene): Promise<void>
   const idleWalk = (idleWalkImg && sliceRawSheet(idleWalkImg, { flip: true, frames: 4 })) || placeholderRawSheet();
   const attacks = (attacksImg && sliceRawSheet(attacksImg, { flip: true, frames: 4 })) || placeholderRawSheet();
   const defense = (defenseImg && sliceRawSheet(defenseImg, { flip: true, frames: 4 })) || placeholderRawSheet();
-  const specials = (specialsImg && sliceRawSheet(specialsImg, { flip: true, frames: 4 })) || placeholderRawSheet();
+  const specials =
+    (specialsImg && sliceRawSheet(specialsImg, { flip: true, frames: 4, scaleMode: 'per-pose' })) ||
+    placeholderRawSheet();
 
   const composed: Record<string, RawSheet> = {
     idle: composeRawSheetFrames([

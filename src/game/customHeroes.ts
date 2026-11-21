@@ -70,6 +70,11 @@ const HERO_BLUEPRINTS: CustomHeroBlueprint[] = [
     id: 'hero-hunter',
     label: 'Garou (TSB)',
     anchorUsage: 'The Strongest Battlegrounds blocky Roblox Hero Hunter Garou martial artist west-facing fighter'
+  },
+  {
+    id: 'anand',
+    label: 'Anand',
+    anchorUsage: 'Anand Overclock prodigy glasses boy blue jacket west-facing fighter'
   }
 ];
 
@@ -314,7 +319,9 @@ async function prepareOneCustomHero(scene: Phaser.Scene, bp: CustomHeroBlueprint
         cropBottomFraction: bp.cropStancesBottom
       })) ||
     placeholderRawSheet();
-  const combat = (combatImg && sliceRawSheet(combatImg, { flip: true, frames: 4 })) || placeholderRawSheet();
+  const combat =
+    (combatImg && sliceRawSheet(combatImg, { flip: true, frames: 4, scaleMode: 'per-pose' })) ||
+    placeholderRawSheet();
 
   // Stances frames: 0=idle, 1=dash/walk, 2=crouch/block, 3=hit/ko
   // Combat frames:  0=light strike, 1=heavy strike, 2=jump strike, 3=special release

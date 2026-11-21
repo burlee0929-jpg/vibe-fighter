@@ -18,6 +18,7 @@ const P2_COLOR = 0xf43f5e;
 
 const SELECTABLE_FIGHTER_IDS = [
   ...MY_FIGHTER_IDS,
+  'anand',
   'vessel-yuji',
   'restless-gambler',
   'hero-hunter',

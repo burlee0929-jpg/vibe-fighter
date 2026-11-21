@@ -420,7 +420,8 @@ export class Fighter {
       return;
     }
 
-    const mult = this.character.id === BAYASAA_CHARACTER_ID ? 2.2 : 1;
+    const mult =
+      this.character.id === BAYASAA_CHARACTER_ID ? 2.2 : this.character.id === 'anand' ? 1.45 : 1;
     this.meter = Phaser.Math.Clamp(this.meter + amount * mult, 0, METER_MAX);
   }
 
@@ -713,9 +714,14 @@ export class Fighter {
     }
 
     const isBayasaa = this.character.id === BAYASAA_CHARACTER_ID;
-    const damageTaken = isBayasaa ? Math.max(1, Math.round(profile.damage * 0.65)) : profile.damage;
-    const knockbackMul = isBayasaa ? 0.6 : 1;
-    const hitstunMul = isBayasaa ? 0.6 : 1;
+    const isAnand = this.character.id === 'anand';
+    const damageTaken = isBayasaa
+      ? Math.max(1, Math.round(profile.damage * 0.65))
+      : isAnand
+        ? Math.max(1, Math.round(profile.damage * 0.85))
+        : profile.damage;
+    const knockbackMul = isBayasaa ? 0.6 : isAnand ? 0.85 : 1;
+    const hitstunMul = isBayasaa ? 0.6 : isAnand ? 0.85 : 1;
 
     this.health = Math.max(0, this.health - damageTaken);
     this.knockbackVel = attackerFacing * profile.knockback * knockbackMul;
@@ -844,6 +850,8 @@ export class Fighter {
 
     if (this.character.id === BAYASAA_CHARACTER_ID) {
       this.regenHealth(3.5 * seconds);
+    } else if (this.character.id === 'anand') {
+      this.regenHealth(1.2 * seconds);
     }
 
     this.recordMotion(seconds, input);
@@ -904,10 +912,7 @@ export class Fighter {
       jumpHeavy: findCharacterAnimationKeyByAction(this.character.id, 'jump-heavy-punch'),
       specialCleave: findCharacterAnimationKeyByAction(this.character.id, 'special-cleave') ?? heavyKey,
       specialFollowup: findCharacterAnimationKeyByAction(this.character.id, 'special-followup') ?? heavyKey,
-      specialArrow:
-        findCharacterAnimationKeyByAction(this.character.id, 'special-arrow') ??
-        findCharacterAnimationKeyByAction(this.character.id, 'special-charge') ??
-        key('light-punch'),
+      specialArrow: findCharacterAnimationKeyByAction(this.character.id, 'special-arrow') ?? key('light-punch'),
       specialCharge: findCharacterAnimationKeyByAction(this.character.id, 'special-charge') ?? key('crouch'),
       special: findCharacterAnimationKeyByAction(this.character.id, 'special') ?? heavyKey,
       knockdown: key('knockdown')

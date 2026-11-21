@@ -12,7 +12,7 @@ export const RAW_COLS = 5;
 /** Feet line and standing body height shared with the bundled fighters. */
 const FEET_Y = 229;
 const BODY_HEIGHT = 200;
-const MAX_POSE_WIDTH = 244;
+const MAX_POSE_WIDTH = 250;
 const MAX_FRAMES = 10;
 const MAX_SOURCE_SIDE = 2048;
 
@@ -30,15 +30,30 @@ export interface RawSheetOptions {
   frames?: number;
   /** Optional fraction of image height to trim from the bottom before slicing (e.g. 0.33). */
   cropBottomFraction?: number;
+  /**
+   * How pose scales are chosen:
+   * - 'uniform' (default): shared sheet scale so crouch/knockdown poses keep proportions,
+   *   excluding flat lying-down poses from clamping standing pose widths.
+   * - 'per-pose': scale each upright/action pose independently to BODY_HEIGHT (capped by MAX_POSE_WIDTH)
+   *   so wide attacks, extended limbs, or tall jumps/auras do not shrink other ability poses.
+   */
+  scaleMode?: 'uniform' | 'per-pose';
 }
 
-interface Pose {
+export interface Pose {
   x: number;
   y: number;
   width: number;
   height: number;
   area: number;
   feetX: number;
+  /** Optional component label id(s) inside `labelMap` to mask out neighboring overlapping poses. */
+  componentIds?: Set<number>;
+}
+
+export interface DetectedPosesResult {
+  poses: Pose[];
+  labelMap: Int32Array | null;
 }
 
 /**
@@ -70,7 +85,7 @@ function loadImage(url: string): Promise<HTMLImageElement | null> {
 /**
  * Slice a raw pose sheet into a normalized spritesheet.
  * @param image - The decoded source image.
- * @param options - Flip and frame-count overrides.
+ * @param options - Flip, frame-count, crop, and scale overrides.
  * @returns The spritesheet, or null when no pose was found.
  */
 export function sliceRawSheet(image: HTMLImageElement, options: RawSheetOptions = {}): RawSheet | null {
@@ -100,20 +115,14 @@ export function sliceRawSheet(image: HTMLImageElement, options: RawSheetOptions 
     mask[index] = pixels.data[index * 4 + 3] > 40 ? 1 : 0;
   }
 
-  const detected = findPoses(mask, width, height);
-  const poses = (
-    options.frames && options.frames !== detected.length
-      ? splitEvenly(mask, width, height, options.frames)
-      : detected
-  ).slice(0, MAX_FRAMES);
+  const { poses: rawPoses, labelMap } = detectSheetPoses(mask, width, height, options.frames);
+  const poses = rawPoses.slice(0, MAX_FRAMES);
 
   if (poses.length === 0) {
     return null;
   }
 
-  const tallest = Math.max(...poses.map((pose) => pose.height));
-  const widest = Math.max(...poses.map((pose) => pose.width));
-  const scale = Math.min(BODY_HEIGHT / tallest, MAX_POSE_WIDTH / widest);
+  const scales = computePoseScales(poses, { scaleMode: options.scaleMode });
   const rows = Math.ceil(poses.length / RAW_COLS);
   const canvas = makeCanvas(RAW_COLS * RAW_CELL, rows * RAW_CELL);
   const context = canvas.getContext('2d');
@@ -125,7 +134,11 @@ export function sliceRawSheet(image: HTMLImageElement, options: RawSheetOptions 
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = 'high';
 
+  const scratch = makeCanvas(1, 1);
+  const scratchCtx = scratch.getContext('2d');
+
   const boxes = poses.map((pose, frame) => {
+    const scale = scales[frame];
     const drawWidth = Math.max(1, Math.round(pose.width * scale));
     const drawHeight = Math.max(1, Math.round(pose.height * scale));
     const centered = Math.round(RAW_CELL / 2 - (pose.feetX - pose.x) * scale);
@@ -143,7 +156,36 @@ export function sliceRawSheet(image: HTMLImageElement, options: RawSheetOptions 
       context.translate(cellX, cellY);
     }
 
-    context.drawImage(source, pose.x, pose.y, pose.width, pose.height, left, top, drawWidth, drawHeight);
+    if (labelMap && pose.componentIds && scratchCtx) {
+      scratch.width = pose.width;
+      scratch.height = pose.height;
+      const isolated = scratchCtx.createImageData(pose.width, pose.height);
+      const dst = isolated.data;
+      const src = pixels.data;
+      const ids = pose.componentIds;
+
+      for (let py = 0; py < pose.height; py += 1) {
+        const sy = pose.y + py;
+        for (let px = 0; px < pose.width; px += 1) {
+          const sx = pose.x + px;
+          const sIdx = sy * width + sx;
+          if (ids.has(labelMap[sIdx])) {
+            const sOff = sIdx * 4;
+            const dOff = (py * pose.width + px) * 4;
+            dst[dOff] = src[sOff];
+            dst[dOff + 1] = src[sOff + 1];
+            dst[dOff + 2] = src[sOff + 2];
+            dst[dOff + 3] = src[sOff + 3];
+          }
+        }
+      }
+
+      scratchCtx.putImageData(isolated, 0, 0);
+      context.drawImage(scratch, 0, 0, pose.width, pose.height, left, top, drawWidth, drawHeight);
+    } else {
+      context.drawImage(source, pose.x, pose.y, pose.width, pose.height, left, top, drawWidth, drawHeight);
+    }
+
     context.restore();
 
     return {
@@ -155,6 +197,67 @@ export function sliceRawSheet(image: HTMLImageElement, options: RawSheetOptions 
   });
 
   return { canvas, frames: poses.length, boxes };
+}
+
+/**
+ * Compute per-pose normalization scales so wide lying-down poses never shrink
+ * standing poses, and `'per-pose'` action sheets keep every action pose full-sized.
+ */
+export function computePoseScales(
+  poses: Array<Pick<Pose, 'width' | 'height'>>,
+  options: { scaleMode?: 'uniform' | 'per-pose'; targetHeight?: number; maxWidth?: number } = {}
+): number[] {
+  if (poses.length === 0) {
+    return [];
+  }
+
+  const targetHeight = options.targetHeight ?? BODY_HEIGHT;
+  const maxWidth = options.maxWidth ?? MAX_POSE_WIDTH;
+  const tallest = Math.max(...poses.map((pose) => pose.height));
+  const isLying = (pose: Pick<Pose, 'width' | 'height'>): boolean =>
+    pose.width > pose.height * 1.65 && pose.height < tallest * 0.5;
+
+  const uprightPoses = poses.filter((pose) => !isLying(pose));
+  const widestUpright = Math.max(...(uprightPoses.length > 0 ? uprightPoses : poses).map((pose) => pose.width));
+  const uniformScale = Math.min(targetHeight / Math.max(1, tallest), maxWidth / Math.max(1, widestUpright));
+
+  if (options.scaleMode === 'per-pose') {
+    return poses.map((pose) =>
+      isLying(pose)
+        ? Math.min(uniformScale, maxWidth / Math.max(1, pose.width))
+        : Math.min(targetHeight / Math.max(1, pose.height), maxWidth / Math.max(1, pose.width))
+    );
+  }
+
+  return poses.map((pose) => Math.min(uniformScale, maxWidth / Math.max(1, pose.width)));
+}
+
+/**
+ * Segment foreground poses cleanly:
+ * 1. Try 1D band/column separation when it already matches `expectedFrames` (or no count is fixed).
+ * 2. When `expectedFrames` is specified and 1D columns overlap, use 2D 8-connected components
+ *    (attaching small detached blades/auras/sparks to the nearest pose seed) so overlapping
+ *    kicks, hands, or lying knockdowns stay cleanly separated.
+ * 3. Fall back to valley-cut splitting around even intervals if poses still touch in 2D.
+ */
+export function detectSheetPoses(
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  expectedFrames?: number
+): DetectedPosesResult {
+  const detected = findPoses(mask, width, height);
+
+  if (!expectedFrames || detected.length === expectedFrames) {
+    return { poses: detected, labelMap: null };
+  }
+
+  const componentResult = extractComponentPoses(mask, width, height, expectedFrames);
+  if (componentResult) {
+    return componentResult;
+  }
+
+  return { poses: splitByValleys(mask, width, height, expectedFrames), labelMap: null };
 }
 
 /**
@@ -368,20 +471,200 @@ function findPoses(mask: Uint8Array, width: number, height: number): Pose[] {
   return poses.filter((pose) => pose.area >= medianArea * 0.12);
 }
 
-/** Split the image into equal-width cells and take the pose inside each. */
-function splitEvenly(mask: Uint8Array, width: number, height: number, frames: number): Pose[] {
+/**
+ * Segment poses using 2D 8-connected components when horizontal columns overlap
+ * (e.g. a high kick extending above a jump pose, or a hand reaching above a lying knockdown).
+ * Detached blades/sparks/effects are attached to the nearest major pose component.
+ */
+function extractComponentPoses(
+  mask: Uint8Array,
+  width: number,
+  height: number,
+  expectedFrames: number
+): DetectedPosesResult | null {
+  const total = width * height;
+  const labelMap = new Int32Array(total);
+  const queue = new Int32Array(total);
+  const comps: Array<{
+    id: number;
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+    area: number;
+  }> = [];
+
+  let nextId = 1;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const start = y * width + x;
+      if (!mask[start] || labelMap[start] !== 0) {
+        continue;
+      }
+
+      const id = nextId;
+      nextId += 1;
+      let head = 0;
+      let tail = 0;
+      queue[tail] = start;
+      tail += 1;
+      labelMap[start] = id;
+
+      let minX = x;
+      let maxX = x;
+      let minY = y;
+      let maxY = y;
+      let area = 0;
+
+      while (head < tail) {
+        const idx = queue[head];
+        head += 1;
+        const cx = idx % width;
+        const cy = (idx / width) | 0;
+        area += 1;
+        if (cx < minX) minX = cx;
+        if (cx > maxX) maxX = cx;
+        if (cy < minY) minY = cy;
+        if (cy > maxY) maxY = cy;
+
+        for (let dy = -1; dy <= 1; dy += 1) {
+          const ny = cy + dy;
+          if (ny < 0 || ny >= height) continue;
+          for (let dx = -1; dx <= 1; dx += 1) {
+            const nx = cx + dx;
+            if (nx < 0 || nx >= width) continue;
+            const nIdx = ny * width + nx;
+            if (mask[nIdx] && labelMap[nIdx] === 0) {
+              labelMap[nIdx] = id;
+              queue[tail] = nIdx;
+              tail += 1;
+            }
+          }
+        }
+      }
+
+      if (area >= 12) {
+        comps.push({ id, minX, maxX, minY, maxY, area });
+      }
+    }
+  }
+
+  if (comps.length < expectedFrames) {
+    return null;
+  }
+
+  comps.sort((a, b) => b.area - a.area);
+  const largestArea = comps[0].area;
+  const seedSlice = comps.slice(0, expectedFrames);
+  if (seedSlice[expectedFrames - 1].area < largestArea * 0.14) {
+    return null;
+  }
+
+  const groups = seedSlice
+    .map((seed) => ({
+      minX: seed.minX,
+      maxX: seed.maxX,
+      minY: seed.minY,
+      maxY: seed.maxY,
+      area: seed.area,
+      ids: new Set<number>([seed.id])
+    }))
+    .sort((a, b) => (a.minX + a.maxX) / 2 - (b.minX + b.maxX) / 2);
+
+  const maxAttachDist = Math.max(24, (width / expectedFrames) * 0.55);
+  const minAttachArea = Math.max(16, largestArea * 0.002);
+
+  for (let i = expectedFrames; i < comps.length; i += 1) {
+    const comp = comps[i];
+    if (comp.area < minAttachArea) {
+      continue;
+    }
+
+    let bestGroup: (typeof groups)[number] | null = null;
+    let bestDist = Infinity;
+
+    for (const group of groups) {
+      const dx = Math.max(0, group.minX - comp.maxX, comp.minX - group.maxX);
+      const dy = Math.max(0, group.minY - comp.maxY, comp.minY - group.maxY);
+      const dist = Math.hypot(dx, dy);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestGroup = group;
+      }
+    }
+
+    if (bestGroup && bestDist <= maxAttachDist) {
+      bestGroup.ids.add(comp.id);
+      bestGroup.minX = Math.min(bestGroup.minX, comp.minX);
+      bestGroup.maxX = Math.max(bestGroup.maxX, comp.maxX);
+      bestGroup.minY = Math.min(bestGroup.minY, comp.minY);
+      bestGroup.maxY = Math.max(bestGroup.maxY, comp.maxY);
+      bestGroup.area += comp.area;
+    }
+  }
+
+  const poses: Pose[] = groups.map((group) => {
+    const poseHeight = group.maxY - group.minY + 1;
+    const feetTop = group.maxY - Math.max(2, Math.round(poseHeight * 0.1));
+    let feetLeft = group.maxX;
+    let feetRight = group.minX;
+
+    for (let y = feetTop; y <= group.maxY; y += 1) {
+      for (let x = group.minX; x <= group.maxX; x += 1) {
+        if (group.ids.has(labelMap[y * width + x])) {
+          feetLeft = Math.min(feetLeft, x);
+          feetRight = Math.max(feetRight, x);
+        }
+      }
+    }
+
+    return {
+      x: group.minX,
+      y: group.minY,
+      width: group.maxX - group.minX + 1,
+      height: poseHeight,
+      area: group.area,
+      feetX: (feetLeft + feetRight) / 2,
+      componentIds: group.ids
+    };
+  });
+
+  return { poses, labelMap };
+}
+
+/** Split the image at minimum-density column valleys around expected intervals. */
+function splitByValleys(mask: Uint8Array, width: number, height: number, frames: number): Pose[] {
+  const colCounts = new Array<number>(width).fill(0);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      colCounts[x] += mask[y * width + x];
+    }
+  }
+
+  const cuts = [0];
+  const radius = Math.max(4, Math.round((width / frames) * 0.35));
+
+  for (let k = 1; k < frames; k += 1) {
+    const center = Math.round((k * width) / frames);
+    const startX = Math.max(cuts[k - 1] + 4, center - radius);
+    const endX = Math.min(width - 4, center + radius);
+    let bestX = center;
+    let bestCount = Infinity;
+
+    for (let x = startX; x <= endX; x += 1) {
+      const count = colCounts[x];
+      if (count < bestCount || (count === bestCount && Math.abs(x - center) < Math.abs(bestX - center))) {
+        bestCount = count;
+        bestX = x;
+      }
+    }
+    cuts.push(bestX);
+  }
+  cuts.push(width);
+
   const poses: Pose[] = [];
-
   for (let frame = 0; frame < frames; frame += 1) {
-    const pose = measurePose(
-      mask,
-      width,
-      Math.round((frame * width) / frames),
-      Math.round(((frame + 1) * width) / frames),
-      0,
-      height
-    );
-
+    const pose = measurePose(mask, width, cuts[frame], cuts[frame + 1], 0, height);
     if (pose) {
       poses.push(pose);
     }

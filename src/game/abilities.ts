@@ -781,6 +781,61 @@ export const HERO_ABILITY_KITS: Record<string, HeroAbilityKit> = {
       notation: '236236K',
       callout: 'WATER STREAM ROCK SMASHING!'
     }
+  },
+
+  anand: {
+    characterId: 'anand',
+    themeColor: 0x2563eb,
+    vfxColor: 0x38bdf8,
+    cutInColor: 'gold',
+    domainStyle: 'cosmic',
+    m1: {
+      style: 'energy',
+      color: 0x38bdf8,
+      moves: ['OVERCLOCK JAB', 'SPARK KICK', 'OPTIC PULSE', 'VOLT FINISHER!'],
+      airMove: 'AERO SMASH',
+      lunge: [85, 130, 180, 265],
+      stepDamageBonus: [6, 7, 8],
+      finisherDamageBonus: 15,
+      finisherKnockbackMul: 1.7
+    },
+    ability1: {
+      name: 'OVERCLOCK',
+      notation: '236S',
+      cooldown: 1.05,
+      lunge: 295,
+      callout: 'OVERCLOCK BLITZ!'
+    },
+    ability2: {
+      name: 'HYPER BLINK',
+      notation: '236P',
+      cooldown: 1.25,
+      lunge: 325,
+      callout: 'HYPER BLINK!',
+      chainCallout: 'SONIC OPTIC SNAP!'
+    },
+    ability3: {
+      name: 'STAR BEAM',
+      notation: '214P',
+      cooldown: 1.65,
+      callout: 'STARLIGHT BEAM!',
+      projectile: {
+        name: 'Starlight Beam',
+        shape: 'beam',
+        color: 0x2563eb,
+        coreColor: 0xfef08a,
+        speed: 940,
+        damage: 20,
+        knockback: 360,
+        hitstun: 520,
+        size: 38
+      }
+    },
+    ability4: {
+      name: 'OVERDRIVE',
+      notation: '236236K',
+      callout: 'INFINITE OVERCLOCK!'
+    }
   }
 };
 

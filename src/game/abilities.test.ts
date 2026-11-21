@@ -15,7 +15,8 @@ const EXPECTED_HERO_IDS = [
   'red-brawler',
   'green-boxer',
   'jiujitsu-fighter',
-  'bayasaa'
+  'bayasaa',
+  'anand'
 ];
 
 describe('HERO_ABILITY_KITS', () => {
@@ -52,12 +53,17 @@ describe('HERO_ABILITY_KITS', () => {
     expect(kit.m1.moves).toHaveLength(4);
   });
 
-  it('keeps Bayasaa in boss-tier OP tuning', () => {
+  it('keeps Bayasaa in boss-tier OP tuning and Anand in slightly-OP tier', () => {
     const bayasaa = getHeroAbilityKit('bayasaa');
+    const anand = getHeroAbilityKit('anand');
     const sukuna = getHeroAbilityKit('sukuna');
-    expect(bayasaa.m1.finisherDamageBonus).toBeGreaterThan(sukuna.m1.finisherDamageBonus);
-    expect(bayasaa.ability3.projectile.damage).toBeGreaterThan(sukuna.ability3.projectile.damage);
-    expect(bayasaa.ability1.cooldown).toBeLessThan(sukuna.ability1.cooldown);
+    expect(bayasaa.m1.finisherDamageBonus).toBeGreaterThan(anand.m1.finisherDamageBonus);
+    expect(bayasaa.ability3.projectile.damage).toBeGreaterThan(anand.ability3.projectile.damage);
+    expect(bayasaa.ability1.cooldown).toBeLessThan(anand.ability1.cooldown);
+
+    expect(anand.m1.finisherDamageBonus).toBeGreaterThan(sukuna.m1.finisherDamageBonus);
+    expect(anand.ability3.projectile.damage).toBeGreaterThan(sukuna.ability3.projectile.damage);
+    expect(anand.ability1.cooldown).toBeLessThan(sukuna.ability1.cooldown);
   });
 
   it('grants immunity during primary ability (slot 1) and Super Art (slot 4)', () => {

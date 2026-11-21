@@ -45,7 +45,8 @@ const FIGHTER_STAT_OVERRIDES: Record<string, Partial<FighterStats>> = {
   'frost-queen': { walkSpeed: 255, airDrift: 220, jump: 1060, scale: 1.44 },
   'vessel-yuji': { walkSpeed: 285, airDrift: 235, jump: 1090, scale: 1.45 },
   'restless-gambler': { walkSpeed: 265, airDrift: 215, jump: 1065, scale: 1.46 },
-  'hero-hunter': { walkSpeed: 290, airDrift: 240, jump: 1085, scale: 1.45 }
+  'hero-hunter': { walkSpeed: 290, airDrift: 240, jump: 1085, scale: 1.45 },
+  anand: { walkSpeed: 335, airDrift: 270, jump: 1140, scale: 1.46 }
 };
 
 /**
@@ -221,6 +222,18 @@ const FIGHTER_COMBAT_OVERRIDES: Record<string, Partial<FighterCombat>> = {
     specialDamage: 7,
     specialKnockback: 165,
     specialHitstun: 265
+  },
+  anand: {
+    maxHealth: 165,
+    highDamage: 11,
+    highKnockback: 195,
+    highHitstun: 360,
+    lowDamage: 20,
+    lowKnockback: 380,
+    lowHitstun: 540,
+    specialDamage: 11,
+    specialKnockback: 200,
+    specialHitstun: 320
   }
 };
 
